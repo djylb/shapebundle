@@ -1,5 +1,8 @@
 # shapebundle
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/djylb/shapebundle.svg)](https://pkg.go.dev/github.com/djylb/shapebundle)
+[![Go](https://github.com/djylb/shapebundle/actions/workflows/go.yml/badge.svg)](https://github.com/djylb/shapebundle/actions/workflows/go.yml)
+
 Loads traffic shaping bundles for [zmux](https://github.com/zmuxio/zmux-go)
 sessions: parse and validate, optional signature check, fetch and cache,
 and turn a bundle into the shaper factory, session limits and pool policy
