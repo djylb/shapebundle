@@ -7,6 +7,7 @@ import (
 
 	"github.com/zmuxio/zmux-go"
 	"github.com/zmuxio/zmux-go/shaping"
+	"github.com/zmuxio/zmux-go/shaping/bundle"
 	"github.com/zmuxio/zmux-go/shaping/machine"
 )
 
@@ -16,11 +17,11 @@ type Order uint8
 
 const (
 	// ByLayer takes each bundle as a whole: a kind resolves to the first
-	// bundle that lists it or DefaultKind, and to that bundle's entry for
-	// it, falling back to its DefaultKind entry.
+	// bundle that lists it or bundle.DefaultKind, and to that bundle's entry for
+	// it, falling back to its bundle.DefaultKind entry.
 	ByLayer Order = iota
 	// ByKind prefers a listed kind over DefaultKind: a kind resolves to
-	// the first bundle that lists it, otherwise to the first DefaultKind
+	// the first bundle that lists it, otherwise to the first bundle.DefaultKind
 	// entry.
 	ByKind
 )
@@ -38,7 +39,7 @@ type ProfileOptions struct {
 // for concurrent use.
 type Profile struct {
 	o        ProfileOptions
-	entries  [256]*Entry
+	entries  [256]*bundle.Entry
 	compiled [256]*machine.Compiled
 	shapers  [256]zmux.ShaperFactory
 	handles  [256]shaping.HandshakeShaper
@@ -47,16 +48,12 @@ type Profile struct {
 // NewProfile resolves every carrier kind over layers, the first taking
 // precedence (nil layers are skipped), and compiles the candidate of each entry
 // once, with a source of its own.
-func NewProfile(o ProfileOptions, layers ...*Bundle) (*Profile, error) {
+func NewProfile(o ProfileOptions, layers ...*bundle.Bundle) (*Profile, error) {
 	p := &Profile{o: o}
-	def := resolveDefault(layers)
 	for i := range p.entries {
-		p.entries[i] = def
+		p.entries[i] = resolve(o.Order, layers, zmux.CarrierKind(i))
 	}
-	for _, k := range kindByName {
-		p.entries[k] = resolve(o.Order, layers, k)
-	}
-	made := map[*Entry]*machine.Compiled{}
+	made := map[*bundle.Entry]*machine.Compiled{}
 	for i, e := range p.entries {
 		if e == nil {
 			continue
@@ -73,32 +70,35 @@ func NewProfile(o ProfileOptions, layers ...*Bundle) (*Profile, error) {
 	return p, nil
 }
 
-func resolveDefault(layers []*Bundle) *Entry {
+func resolveDefault(layers []*bundle.Bundle) *bundle.Entry {
 	for _, b := range layers {
-		if b != nil && b.def != nil {
-			return b.def
+		if b == nil {
+			continue
+		}
+		if e, ok := b.Default(); ok {
+			return e
 		}
 	}
 	return nil
 }
 
-func resolve(o Order, layers []*Bundle, k zmux.CarrierKind) *Entry {
+func resolve(o Order, layers []*bundle.Bundle, k zmux.CarrierKind) *bundle.Entry {
 	for _, b := range layers {
 		if b == nil {
 			continue
 		}
-		if e, ok := b.byKind[k]; ok {
+		if e, ok := b.Lookup(k); ok {
 			return e
 		}
-		if o == ByLayer && b.def != nil {
-			return b.def
+		if e, ok := b.Default(); ok && o == ByLayer {
+			return e
 		}
 	}
 	return resolveDefault(layers)
 }
 
 // Entry returns the entry resolved for k; nil if no bundle has one.
-func (p *Profile) Entry(k zmux.CarrierKind) *Entry { return p.entries[k] }
+func (p *Profile) Entry(k zmux.CarrierKind) *bundle.Entry { return p.entries[k] }
 
 // Shaper returns the Shaper of a pipe by its carrier kind; nil when the
 // kind's entry has no definition.
@@ -124,11 +124,12 @@ func (p *Profile) Limits(k zmux.CarrierKind) (shaping.Limits, bool) {
 
 // Handshake returns the handshake shaper of the Profile, for
 // zmux.Config.HandshakeShaper and the seal configurations: it picks the entry by
-// HandshakeView.Kind; an empty kind or one without an entry takes DefaultKind.
+// HandshakeView.Kind; an empty kind or one without an entry takes bundle.DefaultKind.
 func (p *Profile) Handshake() shaping.HandshakeShaper {
-	byName := make(map[string]shaping.HandshakeShaper, len(kindByName))
-	for n, k := range kindByName {
-		if h := p.handles[k]; h != nil {
+	byName := make(map[string]shaping.HandshakeShaper)
+	for k := 1; k < len(p.handles); k++ {
+		n := bundle.KindName(zmux.CarrierKind(k))
+		if h := p.handles[k]; h != nil && n != bundle.DefaultKind {
 			byName[n] = h
 		}
 	}
@@ -155,7 +156,7 @@ func (p *Profile) Handshake() shaping.HandshakeShaper {
 // kind sets it. ok is false when the result is no limits (no shaped kind, or one
 // without limits).
 func (p *Profile) SessionLimits() (l shaping.Limits, ok bool) {
-	seen := map[*Entry]bool{}
+	seen := map[*bundle.Entry]bool{}
 	var es []*shaping.Limits
 	for _, e := range p.entries {
 		if e == nil || !e.Candidate.HasMachines() || seen[e] {

@@ -17,6 +17,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/zmuxio/zmux-go/shaping/bundle"
+
 	"github.com/djylb/timeshim"
 )
 
@@ -70,7 +72,7 @@ type FetcherConfig struct {
 	// besides the caller's context.
 	Timeout time.Duration
 	// Parse bounds the bundles, response bodies included.
-	Parse ParseOptions
+	Parse bundle.ParseOptions
 	// Clock times Run; nil: the system clock.
 	Clock timeshim.Clock
 	// Jitter is the upper bound of a random delay Run adds to each
@@ -97,7 +99,7 @@ type FetcherConfig struct {
 	// OnUpdate, if set, is called with each bundle that Load or Refresh
 	// makes current, in order, before they return. It must not call Load
 	// or Refresh.
-	OnUpdate func(*Bundle)
+	OnUpdate func(*bundle.Bundle)
 	// OnError, if set, is called with each failed fetch of Run.
 	OnError func(error)
 }
@@ -111,7 +113,7 @@ type Fetcher struct {
 	cache   string // cache file path; "": no cache
 	mu      sync.Mutex
 	last    time.Time // last successful fetch on clock, under mu
-	current atomic.Pointer[Bundle]
+	current atomic.Pointer[bundle.Bundle]
 	changed chan struct{} // wakes Run after Load or Refresh
 }
 
@@ -171,7 +173,7 @@ func NewFetcher(c FetcherConfig) (*Fetcher, error) {
 
 // Current returns the current bundle; nil before a Load or Refresh
 // succeeds.
-func (f *Fetcher) Current() *Bundle { return f.current.Load() }
+func (f *Fetcher) Current() *bundle.Bundle { return f.current.Load() }
 
 // Load reads the cached bundle and makes it current, under the same rules
 // as Refresh: a cached bundle older than the current one (ErrOlder) or too
@@ -182,7 +184,7 @@ func (f *Fetcher) Current() *Bundle { return f.current.Load() }
 // it. It fails with an
 // error wrapping fs.ErrNotExist when nothing is cached, and with
 // ErrNoBundle when there is no cache.
-func (f *Fetcher) Load() (*Bundle, error) {
+func (f *Fetcher) Load() (*bundle.Bundle, error) {
 	if f.cache == "" {
 		return nil, ErrNoBundle
 	}
@@ -201,7 +203,7 @@ func (f *Fetcher) Load() (*Bundle, error) {
 
 // acceptLocked reports whether b may replace base (nil: none): not more
 // than MaxSkew ahead of the clock, and not generated before base.
-func (f *Fetcher) acceptLocked(b, base *Bundle) error {
+func (f *Fetcher) acceptLocked(b, base *bundle.Bundle) error {
 	if f.c.MaxSkew > 0 && b.GeneratedAt().After(f.clock.Now().Add(f.c.MaxSkew)) {
 		return fmt.Errorf("%w: generated_at %v", ErrFuture, b.GeneratedAt())
 	}
@@ -213,7 +215,7 @@ func (f *Fetcher) acceptLocked(b, base *Bundle) error {
 
 // baseLocked returns the bundle a fetched one must not be older than: the
 // current one, otherwise a valid cached one that is not from the future.
-func (f *Fetcher) baseLocked() *Bundle {
+func (f *Fetcher) baseLocked() *bundle.Bundle {
 	if cur := f.current.Load(); cur != nil || f.cache == "" {
 		return cur
 	}
@@ -232,14 +234,14 @@ func (f *Fetcher) baseLocked() *Bundle {
 // from the future is ignored as a base and refused by Load, and is
 // replaced by the next successful Refresh. On any failure the current and cached
 // bundles stay as they were.
-func (f *Fetcher) Refresh(ctx context.Context) (*Bundle, error) {
+func (f *Fetcher) Refresh(ctx context.Context) (*bundle.Bundle, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	raw, err := f.fetch(ctx)
 	if err != nil {
 		return nil, err
 	}
-	b, err := Parse(raw, f.c.Parse)
+	b, err := bundle.Parse(raw, f.c.Parse)
 	if err != nil {
 		return nil, err
 	}
@@ -256,7 +258,7 @@ func (f *Fetcher) Refresh(ctx context.Context) (*Bundle, error) {
 	return b, nil
 }
 
-func (f *Fetcher) setLocked(b *Bundle) {
+func (f *Fetcher) setLocked(b *bundle.Bundle) {
 	f.current.Store(b)
 	if f.c.OnUpdate != nil {
 		f.c.OnUpdate(b)
@@ -295,7 +297,7 @@ func (f *Fetcher) fetch(ctx context.Context) ([]byte, error) {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
 		return nil, &StatusError{Code: resp.StatusCode}
 	}
-	raw, err := readAll(resp.Body, f.c.Parse.maxBytes(), "fetch")
+	raw, err := readAll(resp.Body, f.c.Parse.ByteLimit(), "fetch")
 	if err != nil {
 		return nil, fmt.Errorf("shapebundle: fetch: %w", err)
 	}

@@ -10,6 +10,7 @@ import (
 
 	"github.com/djylb/timeshim"
 	"github.com/zmuxio/zmux-go/shaping"
+	"github.com/zmuxio/zmux-go/shaping/bundle"
 )
 
 func TestUnlimitedMaxBytes(t *testing.T) {
@@ -17,7 +18,7 @@ func TestUnlimitedMaxBytes(t *testing.T) {
 	if err := os.WriteFile(path, []byte(bundleJSON("")), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ParseFile(path, ParseOptions{MaxBytes: -1}); err != nil {
+	if _, err := ParseFile(path, bundle.ParseOptions{MaxBytes: -1}); err != nil {
 		t.Errorf("ParseFile: %v", err)
 	}
 	s := newServer(t, func() string { return bundleJSON("") })

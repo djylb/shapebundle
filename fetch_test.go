@@ -16,6 +16,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zmuxio/zmux-go/shaping/bundle"
+
 	"github.com/djylb/timeshim"
 )
 
@@ -128,7 +130,7 @@ func TestFetcherRefreshAndLoad(t *testing.T) {
 		"signature": func(s *server) { s.badSig = true },
 		"invalid":   func(s *server) { s.body = func() string { return `{"version":2}` } },
 		"too big": func(s *server) {
-			s.body = func() string { return bundleJSON("") + string(make([]byte, DefaultMaxBytes)) }
+			s.body = func() string { return bundleJSON("") + string(make([]byte, bundle.DefaultMaxBytes)) }
 		},
 	}
 	for name, set := range fail {
@@ -249,9 +251,9 @@ func TestFetcherRun(t *testing.T) {
 	c.Clock = clock
 	c.Jitter = time.Minute
 	c.RetryMin, c.RetryMax = 10*time.Second, 40*time.Second
-	updates := make(chan *Bundle, 16)
+	updates := make(chan *bundle.Bundle, 16)
 	errs := make(chan error, 16)
-	c.OnUpdate = func(b *Bundle) { updates <- b }
+	c.OnUpdate = func(b *bundle.Bundle) { updates <- b }
 	c.OnError = func(err error) { errs <- err }
 	f, _ := NewFetcher(c)
 	ctx, cancel := context.WithCancel(ctxT(t))
@@ -269,7 +271,7 @@ func TestFetcherRun(t *testing.T) {
 		}
 		return d[0]
 	}
-	recv := func(ch <-chan *Bundle) *Bundle {
+	recv := func(ch <-chan *bundle.Bundle) *bundle.Bundle {
 		t.Helper()
 		select {
 		case b := <-ch:
@@ -341,8 +343,8 @@ func TestFetcherRunPassedNextChange(t *testing.T) {
 	c := s.config("")
 	c.Clock = clock
 	c.RetryMin = time.Minute
-	updates := make(chan *Bundle, 4)
-	c.OnUpdate = func(b *Bundle) { updates <- b }
+	updates := make(chan *bundle.Bundle, 4)
+	c.OnUpdate = func(b *bundle.Bundle) { updates <- b }
 	f, _ := NewFetcher(c)
 	ctx, cancel := context.WithCancel(ctxT(t))
 	done := make(chan error, 1)

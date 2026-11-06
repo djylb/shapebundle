@@ -5,12 +5,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zmuxio/zmux-go/shaping/bundle"
+
 	"github.com/zmuxio/zmux-go"
+	"github.com/zmuxio/zmux-go/shaping"
 )
 
-func mustParse(t testing.TB, s string) *Bundle {
+func mustParse(t testing.TB, s string) *bundle.Bundle {
 	t.Helper()
-	b, err := Parse([]byte(s), ParseOptions{})
+	b, err := bundle.Parse([]byte(s), bundle.ParseOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,6 +57,24 @@ func TestProfileSingle(t *testing.T) {
 	}
 	if p.Factory()(zmux.ShapedPipe{Carrier: zmux.CarrierSplit}) != nil {
 		t.Error("Factory")
+	}
+}
+
+func TestProfileHandshake(t *testing.T) {
+	plan := func(n string) string {
+		return `[{"handshakes":{"establish":{"hello":{"pad":` + n + `}}}}]`
+	}
+	p, err := NewProfile(ProfileOptions{}, mustParse(t, `{"kinds":{"default":`+plan("5")+`,"websocket":`+plan("7")+`}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := p.Handshake()
+	for kind, want := range map[string]int{"websocket": 7, "quic": 5, "": 5} {
+		var u shaping.UnitPlan
+		h(&shaping.HandshakeView{Kind: kind, Handshake: "establish", Message: "hello"}, &u)
+		if u.Pad != want {
+			t.Errorf("kind %q: pad %d, want %d", kind, u.Pad, want)
+		}
 	}
 }
 

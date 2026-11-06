@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/zmuxio/zmux-go/shaping/bundle"
 )
 
 func TestLoadDir(t *testing.T) {
@@ -20,7 +22,7 @@ func TestLoadDir(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(dir, "sub.json"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	got, err := LoadDir(dir, ParseOptions{})
+	got, err := LoadDir(dir, bundle.ParseOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,10 +30,10 @@ func TestLoadDir(t *testing.T) {
 		t.Fatalf("%+v", got)
 	}
 	write("30-bad.json", `{"version":1}`)
-	if _, err := LoadDir(dir, ParseOptions{}); err == nil {
+	if _, err := LoadDir(dir, bundle.ParseOptions{}); err == nil {
 		t.Error("bad file accepted")
 	}
-	if got, err := LoadDir(filepath.Join(dir, "missing"), ParseOptions{}); got != nil || err != nil {
+	if got, err := LoadDir(filepath.Join(dir, "missing"), bundle.ParseOptions{}); got != nil || err != nil {
 		t.Error("missing dir", got, err)
 	}
 }

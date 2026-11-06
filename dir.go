@@ -5,12 +5,14 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/zmuxio/zmux-go/shaping/bundle"
 )
 
 // DirBundle is a bundle read by LoadDir.
 type DirBundle struct {
 	Name   string // file name in the directory
-	Bundle *Bundle
+	Bundle *bundle.Bundle
 }
 
 // LoadDir reads every bundle in dir: the regular files whose names end in
@@ -19,7 +21,7 @@ type DirBundle struct {
 // cover the temporary files a Fetcher leaves if it stops mid-write. A missing directory holds
 // no bundles. The order is the caller's to use, for example as the layers
 // of NewProfile.
-func LoadDir(dir string, o ParseOptions) ([]DirBundle, error) {
+func LoadDir(dir string, o bundle.ParseOptions) ([]DirBundle, error) {
 	ents, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -44,8 +46,8 @@ func LoadDir(dir string, o ParseOptions) ([]DirBundle, error) {
 }
 
 // Bundles returns the bundles of d in order.
-func Bundles(d []DirBundle) []*Bundle {
-	out := make([]*Bundle, len(d))
+func Bundles(d []DirBundle) []*bundle.Bundle {
+	out := make([]*bundle.Bundle, len(d))
 	for i := range d {
 		out[i] = d[i].Bundle
 	}
