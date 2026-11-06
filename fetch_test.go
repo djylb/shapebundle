@@ -297,14 +297,18 @@ func TestFetcherRun(t *testing.T) {
 	// Failures retry with backoff: [5, 10) s, then [10, 20) s.
 	s.set(func(s *server) { s.status = 500 })
 	clock.AdvanceTo(at)
-	<-errs
+	if err := <-errs; err != nil {
+		t.Log(err)
+	}
 	for _, want := range []time.Duration{10 * time.Second, 20 * time.Second} {
 		at = next()
 		if d := at.Sub(clock.Now()); d < want/2 || d > want {
 			t.Fatalf("retry after %v, want up to %v", d, want)
 		}
 		clock.AdvanceTo(at)
-		<-errs
+		if err := <-errs; err != nil {
+			t.Log(err)
+		}
 	}
 	s.set(func(s *server) { s.status = 200 })
 	clock.AdvanceTo(next())
@@ -355,7 +359,9 @@ func TestFetcherRunPassedNextChange(t *testing.T) {
 		t.Errorf("next fetch after %v", d)
 	}
 	cancel()
-	<-done
+	if err := <-done; err != nil {
+		t.Log(err)
+	}
 
 	// MinInterval holds off an earlier next_change.
 	c.MinInterval = 2 * time.Hour
@@ -375,5 +381,7 @@ func TestFetcherRunPassedNextChange(t *testing.T) {
 		t.Errorf("next fetch after %v, want MinInterval", d)
 	}
 	cancel()
-	<-done
+	if err := <-done; err != nil {
+		t.Log(err)
+	}
 }

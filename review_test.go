@@ -56,28 +56,29 @@ func TestSessionLimits(t *testing.T) {
 	mk := func(kinds string) *Profile {
 		kinds = strings.ReplaceAll(kinds, `{"session":`, `{"definition":`+defA+`,"session":`)
 		kinds = strings.ReplaceAll(kinds, `"shaped":{}`, `{"definition":`+defA+`}`)
-		p, err := NewProfile(ProfileOptions{}, mustParse(t, `{"version":1,"generated_at":"2026-01-01T00:00:00Z","kinds":{`+kinds+`}`))
+		p, err := NewProfile(ProfileOptions{}, mustParse(t, `{"generated_at":"2026-01-01T00:00:00Z","kinds":{`+kinds+`}`))
 		if err != nil {
 			t.Fatal(err)
 		}
 		return p
 	}
-	l, ok := mk(`"quic":{"session":{"max_padding_bytes":10,"max_padding_ratio":0.1,"max_injected":0,"max_delay":2}},` +
-		`"default":{"session":{"max_padding_bytes":30,"max_padding_ratio":0.05,"max_injected":0,"max_pause_total":5,"max_delay":1}}}`).SessionLimits()
-	want := shaping.Limits{MaxPaddingBytes: 30, MaxPaddingRatio: 0.1, NoInjection: true, MaxDelay: 2 * time.Second}
+	m := `"machines":[{"start":0,"states":[{}]}],`
+	l, ok := mk(`"quic":[{` + m + `"limits":{"max_padding_bytes":10,"max_padding_ppm":100000,"max_injected":0,"max_delay":2000000}}],` +
+		`"default":[{` + m + `"limits":{"max_padding_bytes":30,"max_padding_ppm":50000,"max_injected":0,"max_pause_total":5000000,"max_delay":1000000}}]}`).SessionLimits()
+	want := shaping.Limits{MaxPaddingBytes: 30, MaxPaddingPPM: 100000, NoInjection: true, MaxDelay: 2 * time.Second}
 	if !ok || l != want {
 		t.Errorf("widest %+v, want %+v", l, want)
 	}
-	if l, ok := mk(`"quic":{"session":{"max_padding_bytes":0}},"default":{"session":{"max_padding_bytes":0,"max_delay":0}}}`).SessionLimits(); !ok || l != (shaping.Limits{NoPadding: true}) {
+	if l, ok := mk(`"quic":[{` + m + `"limits":{"max_padding_bytes":0}}],"default":[{` + m + `"limits":{"max_padding_bytes":0,"max_delay":0}}]}`).SessionLimits(); !ok || l != (shaping.Limits{NoPadding: true}) {
 		t.Errorf("all none %+v", l)
 	}
-	if l, ok := mk(`"quic":{"session":{"max_padding_bytes":0}},"default":{"session":{"max_padding_bytes":5}}}`).SessionLimits(); !ok || l != (shaping.Limits{MaxPaddingBytes: 5}) {
+	if l, ok := mk(`"quic":[{` + m + `"limits":{"max_padding_bytes":0}}],"default":[{` + m + `"limits":{"max_padding_bytes":5}}]}`).SessionLimits(); !ok || l != (shaping.Limits{MaxPaddingBytes: 5}) {
 		t.Errorf("mixed none %+v", l)
 	}
-	if _, ok := mk(`"quic":{"session":{"max_padding_bytes":1}},"default":"shaped":{}}`).SessionLimits(); ok {
+	if _, ok := mk(`"quic":[{` + m + `"limits":{"max_padding_bytes":1}}],"default":[{` + strings.TrimSuffix(m, ",") + `}]}`).SessionLimits(); ok {
 		t.Error("a shaped kind without limits leaves all unlimited")
 	}
-	if l, ok := mk(`"quic":{"session":{"max_padding_bytes":1}},"default":{"pool":{"count":{"const":1}}}}`).SessionLimits(); !ok || l != (shaping.Limits{MaxPaddingBytes: 1}) {
+	if l, ok := mk(`"quic":[{` + m + `"limits":{"max_padding_bytes":1}}],"default":[{"pool":{"count":1}}]}`).SessionLimits(); !ok || l != (shaping.Limits{MaxPaddingBytes: 1}) {
 		t.Errorf("an unshaped kind is skipped: %+v %v", l, ok)
 	}
 }

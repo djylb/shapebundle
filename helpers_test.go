@@ -11,11 +11,11 @@ import (
 
 // Synthetic fixtures written by hand from the public format.
 const (
-	defA    = `{"version":1,"machines":[{"states":[{"record":{"pad":{"const":32}}}]}]}`
-	defB    = `{"version":1,"machines":[{"states":[{"record":{"pad":{"range":[0,64]}}}]}]}`
-	session = `{"max_padding_ratio":0.1,"max_injected":100,"max_delay":null}`
-	pool    = `{"count":{"const":2},"dial_after":[{"const":1},{"const":5}],"dial_jitter":0.1,` +
-		`"retire":[{"metric":"age","above":{"const":600},"jitter":0.2}],"probe_interval":{"const":15},"probe_jitter":0.25}`
+	defA    = `[{"start":0,"states":[{"record":{"pad":32}}]}]`
+	defB    = `[{"start":0,"states":[{"record":{"pad":{"t":[[1,0,64]]}}}]}]`
+	session = `{"max_padding_ppm":100000,"max_injected":100,"max_delay":null}`
+	pool    = `{"count":2,"dial_after":[1000000,5000000],"dial_jitter":100000,` +
+		`"retire":[{"metric":"age","above":600000000,"jitter":200000}],"probe_interval":15000000,"probe_jitter":250000}`
 )
 
 func bundleJSON(next string) string {
@@ -23,11 +23,11 @@ func bundleJSON(next string) string {
 	if next != "" {
 		n = `"` + next + `"`
 	}
-	return fmt.Sprintf(`{"version":1,"generated_at":"2026-01-01T00:00:00Z","next_change":%s,"kinds":{`+
-		`"websocket":{"definition":%s,"session":%s,"pool":%s},`+
-		`"quic":{"definition":%s},`+
-		`"split":{},`+
-		`"default":{"definition":%s,"session":{"max_padding_bytes":0}}}}`, n, defA, session, pool, defB, defB)
+	return fmt.Sprintf(`{"generated_at":"2026-01-01T00:00:00Z","next_change":%s,"kinds":{`+
+		`"websocket":[{"machines":%s,"limits":%s,"pool":%s}],`+
+		`"quic":[{"machines":%s}],`+
+		`"split":[{}],`+
+		`"default":[{"machines":%s,"limits":{"max_padding_bytes":0}}]}}`, n, defA, session, pool, defB, defB)
 }
 
 // TestMain fails the run if a goroutine of this package outlives the

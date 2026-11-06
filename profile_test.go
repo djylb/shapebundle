@@ -40,17 +40,17 @@ func TestProfileSingle(t *testing.T) {
 	if _, ok := p.Limits(zmux.CarrierQUIC); ok {
 		t.Error("quic has no limits")
 	}
-	pp, err := p.PoolPolicy(zmux.CarrierWebSocket)
-	if err != nil || pp == nil {
-		t.Fatal(pp, err)
+	pp := p.PoolPolicy(zmux.CarrierWebSocket)
+	if pp == nil {
+		t.Fatal("no policy")
 	}
 	var d zmux.PoolDecision
 	pp.Decide(&zmux.PoolView{Now: time.Now()}, &d)
 	if d.Count != 2 {
 		t.Errorf("count %d", d.Count)
 	}
-	if pp, err := p.PoolPolicy(zmux.CarrierQUIC); pp != nil || err != nil {
-		t.Errorf("quic pool %v %v", pp, err)
+	if pp := p.PoolPolicy(zmux.CarrierQUIC); pp != nil {
+		t.Errorf("quic pool %v", pp)
 	}
 	if p.Factory()(zmux.ShapedPipe{Carrier: zmux.CarrierSplit}) != nil {
 		t.Error("Factory")
@@ -58,7 +58,7 @@ func TestProfileSingle(t *testing.T) {
 }
 
 func TestProfileOrder(t *testing.T) {
-	local := mustParse(t, `{"version":1,"generated_at":"2026-01-01T00:00:00Z","kinds":{"default":{"session":{"max_injected":1}}}}`)
+	local := mustParse(t, `{"generated_at":"2026-01-01T00:00:00Z","kinds":{"default":[{"limits":{"max_injected":1}}]}}`)
 	remote := mustParse(t, bundleJSON(""))
 	byLayer, _ := NewProfile(ProfileOptions{Order: ByLayer}, nil, local, remote)
 	byKind, _ := NewProfile(ProfileOptions{Order: ByKind}, local, remote)
@@ -68,11 +68,6 @@ func TestProfileOrder(t *testing.T) {
 	}
 	if byKind.Entry(zmux.CarrierWebSocket) != remote.Entry(zmux.CarrierWebSocket) || byKind.Entry(zmux.CarrierHTTP3) != ld {
 		t.Error("ByKind: a listed kind wins over a default")
-	}
-	only := mustParse(t, `{"version":1,"generated_at":"2026-01-01T00:00:00Z","kinds":{"quic":{}}}`)
-	p, _ := NewProfile(ProfileOptions{}, only, remote)
-	if p.Entry(zmux.CarrierQUIC) != only.Entry(zmux.CarrierQUIC) || p.Entry(zmux.CarrierWebSocket) != remote.Entry(zmux.CarrierWebSocket) {
-		t.Error("ByLayer: a layer without the kind or a default passes on")
 	}
 	empty, _ := NewProfile(ProfileOptions{})
 	if empty.Shaper(zmux.ShapedPipe{}) != nil || empty.Entry(zmux.CarrierQUIC) != nil {

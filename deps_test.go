@@ -22,7 +22,7 @@ func TestDependencies(t *testing.T) {
 		if len(f) < 3 || f[1] == "true" {
 			continue
 		}
-		if !(f[2] == "github.com/zmuxio/zmux-go" || strings.HasPrefix(f[2], "github.com/djylb/")) {
+		if f[2] != "github.com/zmuxio/zmux-go" && !strings.HasPrefix(f[2], "github.com/djylb/") {
 			t.Errorf("dependency outside the standard library, zmux and own libraries: %s", line)
 		}
 	}

@@ -14,7 +14,7 @@ func TestLoadDir(t *testing.T) {
 		}
 	}
 	write("20-b.json", bundleJSON(""))
-	write("10-a.json", `{"version":1,"generated_at":"2026-01-01T00:00:00Z","kinds":{"quic":{}}}`)
+	write("10-a.json", `{"generated_at":"2026-01-01T00:00:00Z","kinds":{"default":[{}],"quic":[{}]}}`)
 	write(".hidden.json", "garbage")
 	write("notes.txt", "garbage")
 	if err := os.Mkdir(filepath.Join(dir, "sub.json"), 0o700); err != nil {

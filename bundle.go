@@ -1,12 +1,11 @@
 // Package shapebundle loads traffic shaping bundles for zmux sessions.
 //
-// A bundle is one JSON document holding, per carrier kind, a shaping
-// definition, session limits, a pool policy and a handshake prelude (version
-// 1 of the zmux shaping configuration format). This package parses and validates
-// bundles strictly, verifies their optional Ed25519 signatures, fetches
-// them over HTTP into a local cache, loads them from a directory, and
-// turns them into a zmux.ShaperFactory, shaping.Limits, zmux.PoolPolicy and
-// machine.Prelude values.
+// A bundle is one JSON document holding, per carrier kind, a list of candidates;
+// the first whose requires are all known is chosen. A candidate holds handshake
+// plans, record machines, session limits and a pool policy. This package parses
+// and validates bundles strictly, verifies their optional Ed25519 signatures,
+// fetches them over HTTP into a local cache, loads them from a directory, and
+// turns them into what zmux takes.
 //
 // Nothing here fetches on the path of a connection: a Profile and a Switch
 // only read bundles already in memory, and a Fetcher fetches only when
@@ -16,21 +15,16 @@ package shapebundle
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
-	"strings"
+	"slices"
 	"time"
 	"unicode/utf8"
 
 	"github.com/zmuxio/zmux-go"
-	"github.com/zmuxio/zmux-go/shaping"
 	"github.com/zmuxio/zmux-go/shaping/machine"
 )
-
-// Version is the bundle format version this package reads.
-const Version = 1
 
 // DefaultMaxBytes bounds a bundle when ParseOptions.MaxBytes is 0.
 const DefaultMaxBytes = 1 << 20
@@ -70,16 +64,21 @@ func KindName(k zmux.CarrierKind) string {
 	return DefaultKind
 }
 
-// ParseOptions bound a bundle. The zero value is valid.
+// ParseOptions bound a bundle and say what its reader knows. The zero value is
+// valid.
 type ParseOptions struct {
 	// MaxBytes bounds the bundle's bytes; 0 is DefaultMaxBytes and a
 	// negative value is no bound.
 	MaxBytes int
-	// Size bounds each definition (machine.Definition.Check), its JSON
-	// bytes included (Size.MaxBytes), and the points of each pool
-	// or prelude distribution (Size.MaxPoints). Zero values: unbounded. The shapers
-	// and pool policies a Profile makes from the bundle keep these bounds.
+	// Size bounds each chosen candidate. Zero values: unbounded.
 	Size machine.SizeLimits
+	// Features are the names a candidate's requires may hold. A candidate
+	// that requires another is skipped.
+	Features []string
+	// AllowUnshaped accepts a kind none of whose candidates can be chosen:
+	// it has no entry, and Bundle.Unshaped reports it. Otherwise that fails
+	// the bundle.
+	AllowUnshaped bool
 }
 
 // maxBytes returns the bound on a bundle's bytes; -1: none.
@@ -108,16 +107,11 @@ func readAll(r io.Reader, limit int, what string) ([]byte, error) {
 	return b, nil
 }
 
-// Entry is what a bundle holds for one kind. Each part may be nil: no
-// shaping, no session limits, the pool's own logic, no handshake shaping. The
-// parts are validated and must not be modified.
+// Entry is the candidate chosen for one kind.
 type Entry struct {
-	Definition *machine.Definition
-	Session    *shaping.Limits
-	Pool       *machine.PoolSpec
-	Prelude    *machine.Prelude
-
-	size machine.SizeLimits // ParseOptions.Size of the bundle
+	// Index is the candidate's place in the kind's list.
+	Index     int
+	Candidate *machine.Candidate
 }
 
 // Bundle is a parsed and validated bundle. It is immutable and safe for
@@ -129,7 +123,11 @@ type Bundle struct {
 	byKind      map[zmux.CarrierKind]*Entry
 	def         *Entry
 	names       []string
+	unshaped    []string
 }
+
+// Unshaped returns the kinds without an entry under ParseOptions.AllowUnshaped.
+func (b *Bundle) Unshaped() []string { return append([]string(nil), b.unshaped...) }
 
 // GeneratedAt returns the bundle's generated_at.
 func (b *Bundle) GeneratedAt() time.Time { return b.generatedAt }
@@ -140,8 +138,7 @@ func (b *Bundle) NextChange() time.Time { return b.nextChange }
 // Raw returns a copy of the bytes the bundle was parsed from.
 func (b *Bundle) Raw() []byte { return bytes.Clone(b.raw) }
 
-// Kinds returns the names of the kinds the bundle lists, in the order
-// they appear.
+// Kinds returns the names of the kinds with an entry, in a fixed order.
 func (b *Bundle) Kinds() []string { return append([]string(nil), b.names...) }
 
 // Lookup returns the entry the bundle lists for k, and whether it lists
@@ -187,227 +184,129 @@ func readBounded(path string, limit int) ([]byte, error) {
 	return readAll(f, limit, path)
 }
 
-// Parse parses and validates a bundle. Parsing is strict at every level:
-// unknown and duplicate members are errors, member names and kind names
-// are case-sensitive, null is an absent member, version must be the JSON
-// integer 1, and the definition, session limits and pool policy of each
-// kind are parsed and validated as by machine.Parse, machine.ParseLimits,
-// machine.ParsePoolSpec and machine.ParsePrelude. Parse keeps a copy of b.
+// Parse parses and validates a bundle. The whole document must be valid JSON
+// without a repeated name in an object. An unknown kind, and every candidate
+// but the chosen one, are not looked into; an error in a chosen candidate fails
+// the bundle. Errors are *machine.FormatError where the format is at fault.
+// Parse keeps a copy of b.
 func Parse(b []byte, o ParseOptions) (*Bundle, error) {
 	if limit := o.maxBytes(); limit >= 0 && len(b) > limit {
 		return nil, fmt.Errorf("shapebundle: %d bytes, limit %d", len(b), limit)
 	}
 	if !utf8.Valid(b) {
-		return nil, errors.New("shapebundle: not UTF-8")
+		return nil, &machine.FormatError{Class: "syntax", Msg: "not UTF-8"}
+	}
+	if err := machine.CheckSyntax(b); err != nil {
+		return nil, err
+	}
+	bad := func(class, format string, a ...any) error {
+		return &machine.FormatError{Class: class, Msg: fmt.Sprintf(format, a...)}
+	}
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(b, &top); err != nil || top == nil {
+		return nil, bad("type", "bundle")
 	}
 	bu := &Bundle{raw: bytes.Clone(b), byKind: map[zmux.CarrierKind]*Entry{}}
-	dec := json.NewDecoder(bytes.NewReader(bu.raw))
-	dec.UseNumber()
-	var hasVersion, hasGenerated, hasKinds bool
-	err := object(dec, "bundle", false, func(name string) error {
-		switch name {
-		case "version":
-			t, err := dec.Token()
+	for k, v := range top {
+		switch k {
+		case "generated_at", "next_change":
+			if string(v) == "null" {
+				continue
+			}
+			var s string
+			if err := json.Unmarshal(v, &s); err != nil {
+				return nil, bad("type", "%s", k)
+			}
+			t, err := time.Parse(time.RFC3339, s)
 			if err != nil {
-				return err
+				t = time.Time{} // the format asks for a string; a Fetcher compares only times it reads
 			}
-			n, ok := t.(json.Number)
-			if t == nil {
-				return nil
+			if k == "generated_at" {
+				bu.generatedAt = t
+			} else {
+				bu.nextChange = t
 			}
-			if !ok || strings.ContainsAny(string(n), ".eE") {
-				return errors.New("version: not an integer")
-			}
-			if string(n) != "1" {
-				return fmt.Errorf("version %s, want %d", n, Version)
-			}
-			hasVersion = true
-		case "generated_at":
-			t, err := timeMember(dec, name)
-			if err != nil {
-				return err
-			}
-			bu.generatedAt, hasGenerated = t, !t.IsZero()
-		case "next_change":
-			t, err := timeMember(dec, name)
-			if err != nil {
-				return err
-			}
-			bu.nextChange = t
-		case "kinds":
-			present, err := bu.parseKinds(dec, &o)
-			if err != nil {
-				return err
-			}
-			hasKinds = present
+		case "tables", "kinds":
 		default:
-			return fmt.Errorf("unknown field %q", name)
+			return nil, bad("unknown_member", "%s", k)
 		}
-		return nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("shapebundle: %w", err)
 	}
-	if _, err := dec.Token(); err != io.EOF {
-		return nil, errors.New("shapebundle: data after the bundle")
+	var tables map[string]json.RawMessage
+	if v, ok := top["tables"]; ok && string(v) != "null" {
+		if err := json.Unmarshal(v, &tables); err != nil {
+			return nil, bad("type", "tables")
+		}
 	}
-	switch {
-	case !hasVersion:
-		return nil, errors.New("shapebundle: missing version")
-	case !hasGenerated:
-		return nil, errors.New("shapebundle: missing generated_at")
-	case !hasKinds:
-		return nil, errors.New("shapebundle: missing kinds")
+	v, ok := top["kinds"]
+	var kinds map[string]json.RawMessage
+	if !ok || string(v) == "null" || json.Unmarshal(v, &kinds) != nil {
+		return nil, bad("type", "kinds")
+	}
+	if d, ok := kinds[DefaultKind]; !ok || string(d) == "null" {
+		return nil, bad("no_default", "kinds.default")
+	}
+	for _, name := range append([]string{DefaultKind}, kindNames[:]...) {
+		raw, ok := kinds[name]
+		if !ok || string(raw) == "null" {
+			continue
+		}
+		e, err := chooseCandidate(raw, tables, &o)
+		if err != nil {
+			return nil, err
+		}
+		if e == nil {
+			if !o.AllowUnshaped {
+				return nil, bad("no_candidate", "%s", name)
+			}
+			bu.unshaped = append(bu.unshaped, name)
+			continue
+		}
+		bu.names = append(bu.names, name)
+		if name == DefaultKind {
+			bu.def = e
+		} else {
+			bu.byKind[kindByName[name]] = e
+		}
 	}
 	return bu, nil
 }
 
-// object reads a JSON object, calling member for each member name with dec
-// positioned at its value; member must consume the value. A null in place
-// of the object returns (false, nil) when nullable.
-func object(dec *json.Decoder, what string, nullable bool, member func(string) error) error {
-	t, err := dec.Token()
-	if err != nil {
-		return err
+// chooseCandidate parses the first candidate whose requires are all known; nil
+// when there is none.
+func chooseCandidate(raw json.RawMessage, tables map[string]json.RawMessage, o *ParseOptions) (*Entry, error) {
+	bad := func(what string) error { return &machine.FormatError{Class: "type", Msg: what} }
+	var cands []json.RawMessage
+	if json.Unmarshal(raw, &cands) != nil || cands == nil {
+		return nil, bad("candidates")
 	}
-	if t == nil && nullable {
-		return errNull
-	}
-	if d, ok := t.(json.Delim); !ok || d != '{' {
-		return fmt.Errorf("%s: not an object", what)
-	}
-	seen := map[string]bool{}
-	for dec.More() {
-		k, err := dec.Token()
+next:
+	for i, c := range cands {
+		var m map[string]json.RawMessage
+		if json.Unmarshal(c, &m) != nil || m == nil {
+			return nil, bad("candidate")
+		}
+		if r, ok := m["requires"]; ok && string(r) != "null" {
+			var req []json.RawMessage
+			if json.Unmarshal(r, &req) != nil || req == nil {
+				return nil, bad("requires")
+			}
+			known := true
+			for _, x := range req {
+				var s *string
+				if json.Unmarshal(x, &s) != nil || s == nil {
+					return nil, bad("requires")
+				}
+				known = known && slices.Contains(o.Features, *s)
+			}
+			if !known {
+				continue next
+			}
+		}
+		cand, err := machine.ParseCandidate(c, tables, o.Size)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		name := k.(string)
-		if seen[name] {
-			return fmt.Errorf("%s: duplicate field %q", what, name)
-		}
-		seen[name] = true
-		if err := member(name); err != nil {
-			return err
-		}
+		return &Entry{Index: i, Candidate: cand}, nil
 	}
-	_, err = dec.Token() // '}'
-	return err
-}
-
-// errNull reports a null object to its nullable caller.
-var errNull = errors.New("null")
-
-// timeMember reads an RFC 3339 string or null (the zero time).
-func timeMember(dec *json.Decoder, name string) (time.Time, error) {
-	t, err := dec.Token()
-	if err != nil || t == nil {
-		return time.Time{}, err
-	}
-	s, ok := t.(string)
-	if !ok {
-		return time.Time{}, fmt.Errorf("%s: not a string", name)
-	}
-	v, err := time.Parse(time.RFC3339, s)
-	if err != nil {
-		return time.Time{}, fmt.Errorf("%s: %w", name, err)
-	}
-	return v, nil
-}
-
-// parseKinds reads the kinds member; it reports false for null.
-func (b *Bundle) parseKinds(dec *json.Decoder, o *ParseOptions) (bool, error) {
-	err := object(dec, "kinds", true, func(name string) error {
-		k, known := kindByName[name]
-		if !known && name != DefaultKind {
-			return fmt.Errorf("kinds: unknown kind %q", name)
-		}
-		e, err := parseEntry(dec, name, o)
-		if err != nil {
-			return err
-		}
-		if e == nil {
-			// A null kind is an absent member.
-			return nil
-		}
-		b.names = append(b.names, name)
-		if known {
-			b.byKind[k] = e
-		} else {
-			b.def = e
-		}
-		return nil
-	})
-	if errors.Is(err, errNull) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	if len(b.names) == 0 {
-		return false, errors.New("kinds: empty")
-	}
-	return true, nil
-}
-
-// parseEntry reads one kind's entry; nil for null.
-func parseEntry(dec *json.Decoder, kind string, o *ParseOptions) (*Entry, error) {
-	e := &Entry{size: o.Size}
-	err := object(dec, "kinds."+kind, true, func(name string) error {
-		var raw json.RawMessage
-		if err := dec.Decode(&raw); err != nil {
-			return err
-		}
-		if string(raw) == "null" {
-			return nil
-		}
-		where := "kinds." + kind + "." + name
-		switch name {
-		case "definition":
-			if m := o.Size.MaxBytes; m > 0 && len(raw) > m {
-				return fmt.Errorf("%s: %d bytes, limit %d", where, len(raw), m)
-			}
-			d, err := machine.Parse(raw)
-			if err == nil {
-				err = d.Check(o.Size)
-			}
-			if err != nil {
-				return fmt.Errorf("%s: %w", where, err)
-			}
-			e.Definition = d
-		case "session":
-			l, err := machine.ParseLimits(raw)
-			if err != nil {
-				return fmt.Errorf("%s: %w", where, err)
-			}
-			e.Session = &l
-		case "pool":
-			s, err := machine.ParsePoolSpec(raw)
-			if err == nil {
-				// Policy checks the point bounds; the policy itself is
-				// dropped.
-				_, err = s.Policy(machine.Options{Limits: o.Size})
-			}
-			if err != nil {
-				return fmt.Errorf("%s: %w", where, err)
-			}
-			e.Pool = s
-		case "prelude":
-			p, err := machine.ParsePrelude(raw)
-			if err == nil {
-				err = p.Check(o.Size)
-			}
-			if err != nil {
-				return fmt.Errorf("%s: %w", where, err)
-			}
-			e.Prelude = p
-		default:
-			return fmt.Errorf("%s: unknown field", where)
-		}
-		return nil
-	})
-	if errors.Is(err, errNull) {
-		return nil, nil
-	}
-	return e, err
+	return nil, nil
 }

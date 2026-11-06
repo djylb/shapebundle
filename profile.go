@@ -29,9 +29,7 @@ const (
 type ProfileOptions struct {
 	// Order resolves kinds over the bundles.
 	Order Order
-	// NewSource returns the random source of each shaper and pool policy;
-	// nil: machine.Options' default. Size bounds come from the
-	// ParseOptions.Size each bundle was parsed with.
+	// NewSource is machine.Options.NewSource of every candidate.
 	NewSource func() rand.Source
 }
 
@@ -39,15 +37,16 @@ type ProfileOptions struct {
 // bundles, with the shapers of each entry made. It is immutable and safe
 // for concurrent use.
 type Profile struct {
-	o       ProfileOptions
-	entries [256]*Entry
-	shapers [256]zmux.ShaperFactory
+	o        ProfileOptions
+	entries  [256]*Entry
+	compiled [256]*machine.Compiled
+	shapers  [256]zmux.ShaperFactory
+	handles  [256]shaping.HandshakeShaper
 }
 
 // NewProfile resolves every carrier kind over layers, the first taking
-// precedence (nil layers are skipped), and makes the shaper factory of
-// each definition. Parse already checked every part against its bounds,
-// so an error is not expected.
+// precedence (nil layers are skipped), and compiles the candidate of each entry
+// once, with a source of its own.
 func NewProfile(o ProfileOptions, layers ...*Bundle) (*Profile, error) {
 	p := &Profile{o: o}
 	def := resolveDefault(layers)
@@ -57,33 +56,21 @@ func NewProfile(o ProfileOptions, layers ...*Bundle) (*Profile, error) {
 	for _, k := range kindByName {
 		p.entries[k] = resolve(o.Order, layers, k)
 	}
-	made := map[*Entry]zmux.ShaperFactory{}
+	made := map[*Entry]*machine.Compiled{}
 	for i, e := range p.entries {
 		if e == nil {
 			continue
 		}
-		f, ok := made[e]
+		c, ok := made[e]
 		if !ok {
-			if e.Definition != nil {
-				var err error
-				if f, err = e.Definition.Factory(p.options(e)); err != nil {
-					return nil, err
-				}
-			}
-			if e.Pool != nil {
-				if _, err := e.Pool.Policy(p.options(e)); err != nil {
-					return nil, err
-				}
-			}
-			made[e] = f
+			c = e.Candidate.Compile(machine.Options{NewSource: o.NewSource})
+			made[e] = c
 		}
-		p.shapers[i] = f
+		p.compiled[i] = c
+		p.shapers[i] = c.Factory()
+		p.handles[i] = c.Handshake()
 	}
 	return p, nil
-}
-
-func (p *Profile) options(e *Entry) machine.Options {
-	return machine.Options{NewSource: p.o.NewSource, Limits: e.size}
 }
 
 func resolveDefault(layers []*Bundle) *Entry {
@@ -129,18 +116,32 @@ func (p *Profile) Factory() zmux.ShaperFactory { return p.Shaper }
 // Limits returns the session limits resolved for k, and whether there
 // are any (zmux.Config.ShapingLimits).
 func (p *Profile) Limits(k zmux.CarrierKind) (shaping.Limits, bool) {
-	if e := p.entries[k]; e != nil && e.Session != nil {
-		return *e.Session, true
+	if e := p.entries[k]; e != nil {
+		return e.Candidate.Limits()
 	}
 	return shaping.Limits{}, false
 }
 
-// Prelude returns the handshake prelude resolved for k; nil if none.
-func (p *Profile) Prelude(k zmux.CarrierKind) *machine.Prelude {
-	if e := p.entries[k]; e != nil {
-		return e.Prelude
+// Handshake returns the handshake shaper of the Profile, for
+// zmux.Config.HandshakeShaper and the seal configurations: it picks the entry by
+// HandshakeView.Kind; an empty kind or one without an entry takes DefaultKind.
+func (p *Profile) Handshake() shaping.HandshakeShaper {
+	byName := make(map[string]shaping.HandshakeShaper, len(kindByName))
+	for n, k := range kindByName {
+		if h := p.handles[k]; h != nil {
+			byName[n] = h
+		}
 	}
-	return nil
+	def := p.handles[0]
+	return func(v *shaping.HandshakeView, u *shaping.UnitPlan) {
+		h, ok := byName[v.Kind]
+		if !ok {
+			h = def
+		}
+		if h != nil {
+			h(v, u)
+		}
+	}
 }
 
 // SessionLimits returns limits for a session whose pipes may be of any
@@ -157,32 +158,33 @@ func (p *Profile) SessionLimits() (l shaping.Limits, ok bool) {
 	seen := map[*Entry]bool{}
 	var es []*shaping.Limits
 	for _, e := range p.entries {
-		if e == nil || e.Definition == nil || seen[e] {
+		if e == nil || !e.Candidate.HasMachines() || seen[e] {
 			continue // an unshaped kind adds nothing to bound
 		}
 		seen[e] = true
-		if e.Session == nil {
+		x, ok := e.Candidate.Limits()
+		if !ok {
 			return shaping.Limits{}, false
 		}
-		es = append(es, e.Session)
+		es = append(es, &x)
 	}
 	if len(es) == 0 {
 		return shaping.Limits{}, false
 	}
-	l.NoPadding, l.NoPaddingRatio, l.NoInjection, l.NoPause = true, true, true, true
+	l.NoPadding, l.NoPaddingPPM, l.NoInjection, l.NoPause = true, true, true, true
 	// The *Unl flags mark a field some kind leaves unlimited.
 	padUnl, ratioUnl, injUnl, pauseUnl, delayUnl := false, false, false, false, false
 	for _, x := range es {
 		l.NoPadding = l.NoPadding && x.NoPadding
-		l.NoPaddingRatio = l.NoPaddingRatio && (x.NoPaddingRatio || x.NoPadding)
+		l.NoPaddingPPM = l.NoPaddingPPM && (x.NoPaddingPPM || x.NoPadding)
 		l.NoInjection = l.NoInjection && (x.NoInjection || x.NoPadding)
 		l.NoPause = l.NoPause && x.NoPause
 		if !x.NoPadding {
 			padUnl = padUnl || x.MaxPaddingBytes == 0
 			l.MaxPaddingBytes = max(l.MaxPaddingBytes, x.MaxPaddingBytes)
-			if !x.NoPaddingRatio {
-				ratioUnl = ratioUnl || x.MaxPaddingRatio == 0
-				l.MaxPaddingRatio = max(l.MaxPaddingRatio, x.MaxPaddingRatio)
+			if !x.NoPaddingPPM {
+				ratioUnl = ratioUnl || x.MaxPaddingPPM == 0
+				l.MaxPaddingPPM = max(l.MaxPaddingPPM, x.MaxPaddingPPM)
 			}
 			if !x.NoInjection {
 				injUnl = injUnl || x.MaxInjected == 0
@@ -197,14 +199,14 @@ func (p *Profile) SessionLimits() (l shaping.Limits, ok bool) {
 		}
 	}
 	if l.NoPadding {
-		l.NoPaddingRatio, l.NoInjection = false, false // implied
+		l.NoPaddingPPM, l.NoInjection = false, false // implied
 	}
 	unlimited := func(unl, no bool) bool { return unl && !no }
 	if unlimited(padUnl, l.NoPadding) {
 		l.MaxPaddingBytes = 0
 	}
-	if unlimited(ratioUnl, l.NoPaddingRatio) {
-		l.MaxPaddingRatio = 0
+	if unlimited(ratioUnl, l.NoPaddingPPM) {
+		l.MaxPaddingPPM = 0
 	}
 	if unlimited(injUnl, l.NoInjection) {
 		l.MaxInjected = 0
@@ -220,14 +222,12 @@ func (p *Profile) SessionLimits() (l shaping.Limits, ok bool) {
 
 // PoolPolicy returns a new pool policy for k, nil when its entry has
 // none (the pool's own logic). Each pool needs its own: a policy keeps
-// per-instance and per-member draws. NewProfile made one of each with the
-// same options, so an error is not expected.
-func (p *Profile) PoolPolicy(k zmux.CarrierKind) (zmux.PoolPolicy, error) {
-	e := p.entries[k]
-	if e == nil || e.Pool == nil {
-		return nil, nil
+// per-member draws.
+func (p *Profile) PoolPolicy(k zmux.CarrierKind) zmux.PoolPolicy {
+	if c := p.compiled[k]; c != nil {
+		return c.PoolPolicy()
 	}
-	return e.Pool.Policy(p.options(e))
+	return nil
 }
 
 // Switch holds the current Profile, so that sessions and pools made once
@@ -282,7 +282,7 @@ func (sp *switchPolicy) Decide(v *zmux.PoolView, d *zmux.PoolDecision) {
 	if p != sp.cur {
 		sp.cur, sp.inner = p, nil
 		if p != nil {
-			sp.inner, _ = p.PoolPolicy(sp.k)
+			sp.inner = p.PoolPolicy(sp.k)
 		}
 	}
 	if sp.inner != nil {
