@@ -1,12 +1,12 @@
 // Package shapebundle loads traffic shaping bundles for zmux sessions.
 //
 // A bundle is one JSON document holding, per carrier kind, a shaping
-// definition, session limits and a pool policy (version 1 of the zmux
-// shaping configuration format). This package parses and validates
+// definition, session limits, a pool policy and a handshake prelude (version
+// 1 of the zmux shaping configuration format). This package parses and validates
 // bundles strictly, verifies their optional Ed25519 signatures, fetches
 // them over HTTP into a local cache, loads them from a directory, and
-// turns them into a zmux.ShaperFactory, shaping.Limits and
-// zmux.PoolPolicy values.
+// turns them into a zmux.ShaperFactory, shaping.Limits, zmux.PoolPolicy and
+// machine.Prelude values.
 //
 // Nothing here fetches on the path of a connection: a Profile and a Switch
 // only read bundles already in memory, and a Fetcher fetches only when
@@ -77,7 +77,7 @@ type ParseOptions struct {
 	MaxBytes int
 	// Size bounds each definition (machine.Definition.Check), its JSON
 	// bytes included (Size.MaxBytes), and the points of each pool
-	// distribution (Size.MaxPoints). Zero values: unbounded. The shapers
+	// or prelude distribution (Size.MaxPoints). Zero values: unbounded. The shapers
 	// and pool policies a Profile makes from the bundle keep these bounds.
 	Size machine.SizeLimits
 }
@@ -109,12 +109,13 @@ func readAll(r io.Reader, limit int, what string) ([]byte, error) {
 }
 
 // Entry is what a bundle holds for one kind. Each part may be nil: no
-// shaping, no session limits, the pool's own logic. The parts are
-// validated and must not be modified.
+// shaping, no session limits, the pool's own logic, no handshake shaping. The
+// parts are validated and must not be modified.
 type Entry struct {
 	Definition *machine.Definition
 	Session    *shaping.Limits
 	Pool       *machine.PoolSpec
+	Prelude    *machine.Prelude
 
 	size machine.SizeLimits // ParseOptions.Size of the bundle
 }
@@ -190,8 +191,8 @@ func readBounded(path string, limit int) ([]byte, error) {
 // unknown and duplicate members are errors, member names and kind names
 // are case-sensitive, null is an absent member, version must be the JSON
 // integer 1, and the definition, session limits and pool policy of each
-// kind are parsed and validated as by machine.Parse, machine.ParseLimits
-// and machine.ParsePoolSpec. Parse keeps a copy of b.
+// kind are parsed and validated as by machine.Parse, machine.ParseLimits,
+// machine.ParsePoolSpec and machine.ParsePrelude. Parse keeps a copy of b.
 func Parse(b []byte, o ParseOptions) (*Bundle, error) {
 	if limit := o.maxBytes(); limit >= 0 && len(b) > limit {
 		return nil, fmt.Errorf("shapebundle: %d bytes, limit %d", len(b), limit)
@@ -391,6 +392,15 @@ func parseEntry(dec *json.Decoder, kind string, o *ParseOptions) (*Entry, error)
 				return fmt.Errorf("%s: %w", where, err)
 			}
 			e.Pool = s
+		case "prelude":
+			p, err := machine.ParsePrelude(raw)
+			if err == nil {
+				err = p.Check(o.Size)
+			}
+			if err != nil {
+				return fmt.Errorf("%s: %w", where, err)
+			}
+			e.Prelude = p
 		default:
 			return fmt.Errorf("%s: unknown field", where)
 		}

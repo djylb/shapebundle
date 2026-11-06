@@ -135,6 +135,14 @@ func (p *Profile) Limits(k zmux.CarrierKind) (shaping.Limits, bool) {
 	return shaping.Limits{}, false
 }
 
+// Prelude returns the handshake prelude resolved for k; nil if none.
+func (p *Profile) Prelude(k zmux.CarrierKind) *machine.Prelude {
+	if e := p.entries[k]; e != nil {
+		return e.Prelude
+	}
+	return nil
+}
+
 // SessionLimits returns limits for a session whose pipes may be of any
 // kind, such as every session of one listener configuration (zmux.Config
 // holds a single ShapingLimits) or a multipath client session mixing
