@@ -134,14 +134,12 @@ func (p *Profile) Handshake() shaping.HandshakeShaper {
 		}
 	}
 	def := p.handles[0]
-	return func(v *shaping.HandshakeView, u *shaping.UnitPlan) {
+	return func(v *shaping.HandshakeView, u *shaping.UnitPlan) bool {
 		h, ok := byName[v.Kind]
 		if !ok {
 			h = def
 		}
-		if h != nil {
-			h(v, u)
-		}
+		return h != nil && h(v, u)
 	}
 }
 
