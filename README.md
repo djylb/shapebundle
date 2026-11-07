@@ -6,7 +6,7 @@
 Fetches and loads traffic shaping bundles for
 [zmux](https://github.com/zmuxio/zmux-go) sessions: optional signature check,
 fetch and cache, load from a directory, and compose one or more bundles into
-the shaper factory, session limits, pool policy and handshake shaper zmux
+the shaper factory, session budget, pool policy and handshake shaper zmux
 takes. Parsing and candidate selection are in zmux's `shaping/bundle` package.
 
 ```sh

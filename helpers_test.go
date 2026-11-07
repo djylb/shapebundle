@@ -13,7 +13,7 @@ import (
 const (
 	defA    = `[{"start":0,"states":[{"record":{"pad":32}}]}]`
 	defB    = `[{"start":0,"states":[{"record":{"pad":{"t":[[1,0,64]]}}}]}]`
-	session = `{"max_padding_ppm":100000,"max_injected":100,"max_delay":null}`
+	session = `{"wire":{"initial":100,"per_mb":100000},"max_delay":null}`
 	pool    = `{"count":2,"dial_after":[1000000,5000000],"dial_jitter":100000,` +
 		`"retire":[{"metric":"age","above":600000000,"jitter":200000}],"probe_interval":15000000,"probe_jitter":250000}`
 )
@@ -24,10 +24,10 @@ func bundleJSON(next string) string {
 		n = `"` + next + `"`
 	}
 	return fmt.Sprintf(`{"generated_at":"2026-01-01T00:00:00Z","next_change":%s,"kinds":{`+
-		`"websocket":[{"machines":%s,"limits":%s,"pool":%s}],`+
+		`"websocket":[{"machines":%s,"budget":%s,"pool":%s}],`+
 		`"quic":[{"machines":%s}],`+
 		`"split":[{}],`+
-		`"default":[{"machines":%s,"limits":{"max_padding_bytes":0}}]}}`, n, defA, session, pool, defB, defB)
+		`"default":[{"machines":%s,"budget":{"wire":{}}}]}}`, n, defA, session, pool, defB, defB)
 }
 
 // TestMain fails the run if a goroutine of this package outlives the

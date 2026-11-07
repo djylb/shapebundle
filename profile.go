@@ -113,13 +113,13 @@ func (p *Profile) Shaper(sp zmux.ShapedPipe) shaping.Shaper {
 // or SetShaper.
 func (p *Profile) Factory() zmux.ShaperFactory { return p.Shaper }
 
-// Limits returns the session limits resolved for k, and whether there
-// are any (zmux.Config.ShapingLimits).
-func (p *Profile) Limits(k zmux.CarrierKind) (shaping.Limits, bool) {
-	if e := p.entries[k]; e != nil {
-		return e.Candidate.Limits()
+// Budget returns the budget function resolved for k
+// (zmux.Config.ShapingBudget); nil when its entry has no budget.
+func (p *Profile) Budget(k zmux.CarrierKind) func() shaping.Budget {
+	if c := p.compiled[k]; c != nil {
+		return c.Budget()
 	}
-	return shaping.Limits{}, false
+	return nil
 }
 
 // Handshake returns the handshake shaper of the Profile, for
@@ -143,80 +143,50 @@ func (p *Profile) Handshake() shaping.HandshakeShaper {
 	}
 }
 
-// SessionLimits returns limits for a session whose pipes may be of any
-// kind, such as every session of one listener configuration (zmux.Config
-// holds a single ShapingLimits) or a multipath client session mixing
-// kinds: field by field the widest over the kinds that are shaped (whose
-// entry has a definition), so that no kind's shaping is cut by another's
-// limit. Kinds with no entry or no definition add no shaping and are
-// skipped; a shaped kind without session limits leaves every field
-// unlimited; a No switch is set only if every
-// kind sets it. ok is false when the result is no limits (no shaped kind, or one
-// without limits).
-func (p *Profile) SessionLimits() (l shaping.Limits, ok bool) {
+// SessionBudget returns the budget function of a session whose pipes may be of
+// any kind, such as every session of one listener configuration or a multipath
+// session mixing kinds: field by field the widest over the kinds that are shaped
+// (whose entry has a definition), so that no kind is cut by another's budget. A
+// shaped kind without a budget leaves it nil, as does no shaped kind; a shaped
+// kind without an account or a bound on one wait leaves that part unset.
+func (p *Profile) SessionBudget() func() shaping.Budget {
 	seen := map[*bundle.Entry]bool{}
-	var es []*shaping.Limits
-	for _, e := range p.entries {
+	var fs []func() shaping.Budget
+	for k, e := range p.entries {
 		if e == nil || !e.Candidate.HasMachines() || seen[e] {
-			continue // an unshaped kind adds nothing to bound
+			continue
 		}
 		seen[e] = true
-		x, ok := e.Candidate.Limits()
-		if !ok {
-			return shaping.Limits{}, false
+		f := p.compiled[k].Budget()
+		if f == nil {
+			return nil
 		}
-		es = append(es, &x)
+		fs = append(fs, f)
 	}
-	if len(es) == 0 {
-		return shaping.Limits{}, false
+	if len(fs) == 0 {
+		return nil
 	}
-	l.NoPadding, l.NoPaddingPPM, l.NoInjection, l.NoPause = true, true, true, true
-	// The *Unl flags mark a field some kind leaves unlimited.
-	padUnl, ratioUnl, injUnl, pauseUnl, delayUnl := false, false, false, false, false
-	for _, x := range es {
-		l.NoPadding = l.NoPadding && x.NoPadding
-		l.NoPaddingPPM = l.NoPaddingPPM && (x.NoPaddingPPM || x.NoPadding)
-		l.NoInjection = l.NoInjection && (x.NoInjection || x.NoPadding)
-		l.NoPause = l.NoPause && x.NoPause
-		if !x.NoPadding {
-			padUnl = padUnl || x.MaxPaddingBytes == 0
-			l.MaxPaddingBytes = max(l.MaxPaddingBytes, x.MaxPaddingBytes)
-			if !x.NoPaddingPPM {
-				ratioUnl = ratioUnl || x.MaxPaddingPPM == 0
-				l.MaxPaddingPPM = max(l.MaxPaddingPPM, x.MaxPaddingPPM)
+	return func() shaping.Budget {
+		o := fs[0]()
+		for _, f := range fs[1:] {
+			x := f()
+			switch {
+			case o.NoInjection:
+				o.Wire = x.Wire
+			case !x.NoInjection && (o.Wire == shaping.Account{} || x.Wire == shaping.Account{}):
+				o.Wire = shaping.Account{}
+			case !x.NoInjection:
+				o.Wire = shaping.Account{Initial: max(o.Wire.Initial, x.Wire.Initial), PerMB: max(o.Wire.PerMB, x.Wire.PerMB), PerSec: max(o.Wire.PerSec, x.Wire.PerSec)}
 			}
-			if !x.NoInjection {
-				injUnl = injUnl || x.MaxInjected == 0
-				l.MaxInjected = max(l.MaxInjected, x.MaxInjected)
+			o.NoInjection = o.NoInjection && x.NoInjection
+			if o.MaxDelay <= 0 || x.MaxDelay <= 0 {
+				o.MaxDelay = 0
+			} else {
+				o.MaxDelay = max(o.MaxDelay, x.MaxDelay)
 			}
 		}
-		if !x.NoPause {
-			pauseUnl = pauseUnl || x.MaxPauseTotal == 0
-			delayUnl = delayUnl || x.MaxDelay == 0
-			l.MaxPauseTotal = max(l.MaxPauseTotal, x.MaxPauseTotal)
-			l.MaxDelay = max(l.MaxDelay, x.MaxDelay)
-		}
+		return o
 	}
-	if l.NoPadding {
-		l.NoPaddingPPM, l.NoInjection = false, false // implied
-	}
-	unlimited := func(unl, no bool) bool { return unl && !no }
-	if unlimited(padUnl, l.NoPadding) {
-		l.MaxPaddingBytes = 0
-	}
-	if unlimited(ratioUnl, l.NoPaddingPPM) {
-		l.MaxPaddingPPM = 0
-	}
-	if unlimited(injUnl, l.NoInjection) {
-		l.MaxInjected = 0
-	}
-	if unlimited(pauseUnl, l.NoPause) {
-		l.MaxPauseTotal = 0
-	}
-	if unlimited(delayUnl, l.NoPause) {
-		l.MaxDelay = 0
-	}
-	return l, true
 }
 
 // PoolPolicy returns a new pool policy for k, nil when its entry has
@@ -245,10 +215,9 @@ func (s *Switch) Load() *Profile { return s.p.Load() }
 // Factory returns a zmux.ShaperFactory that shapes each pipe by the
 // Profile current when the pipe's first record is made. A pipe keeps its
 // Shaper when the Profile is replaced later: to move the pipes of an open
-// session over, call its SetShaper(s.Factory()) again after Store (zmux
-// then makes a new Shaper for each pipe at its next record). Session
-// limits (zmux.Config.ShapingLimits) are fixed when a session is created,
-// so open sessions keep theirs.
+// session over, call its SetShaper again after Store (zmux then makes a new
+// Shaper for each pipe at its next record), with the new Profile's budget; the
+// session's account carries over.
 func (s *Switch) Factory() zmux.ShaperFactory {
 	return func(sp zmux.ShapedPipe) shaping.Shaper {
 		if p := s.p.Load(); p != nil {

@@ -53,34 +53,37 @@ func TestRefreshRejectsOlder(t *testing.T) {
 	}
 }
 
-func TestSessionLimits(t *testing.T) {
+func TestSessionBudget(t *testing.T) {
+	m := `"machines":[{"start":0,"states":[{}]}],`
 	mk := func(kinds string) *Profile {
-		kinds = strings.ReplaceAll(kinds, `{"session":`, `{"definition":`+defA+`,"session":`)
-		kinds = strings.ReplaceAll(kinds, `"shaped":{}`, `{"definition":`+defA+`}`)
-		p, err := NewProfile(ProfileOptions{}, mustParse(t, `{"generated_at":"2026-01-01T00:00:00Z","kinds":{`+kinds+`}`))
+		t.Helper()
+		b := mustParse(t, `{"generated_at":"2026-01-01T00:00:00Z","kinds":{`+kinds+`}`)
+		p, err := NewProfile(ProfileOptions{}, b)
 		if err != nil {
 			t.Fatal(err)
 		}
 		return p
 	}
-	m := `"machines":[{"start":0,"states":[{}]}],`
-	l, ok := mk(`"quic":[{` + m + `"limits":{"max_padding_bytes":10,"max_padding_ppm":100000,"max_injected":0,"max_delay":2000000}}],` +
-		`"default":[{` + m + `"limits":{"max_padding_bytes":30,"max_padding_ppm":50000,"max_injected":0,"max_pause_total":5000000,"max_delay":1000000}}]}`).SessionLimits()
-	want := shaping.Limits{MaxPaddingBytes: 30, MaxPaddingPPM: 100000, NoInjection: true, MaxDelay: 2 * time.Second}
-	if !ok || l != want {
-		t.Errorf("widest %+v, want %+v", l, want)
+	f := mk(`"quic":[{` + m + `"budget":{"wire":{"initial":10,"per_mb":100000},"max_delay":2000000}}],` +
+		`"default":[{` + m + `"budget":{"wire":{"initial":30,"per_mb":50000},"max_delay":1000000}}]}`).SessionBudget()
+	want := shaping.Budget{Wire: shaping.Account{Initial: 30, PerMB: 100000}, MaxDelay: 2 * time.Second}
+	if f == nil || f() != want {
+		t.Error("widest over the kinds")
 	}
-	if l, ok := mk(`"quic":[{` + m + `"limits":{"max_padding_bytes":0}}],"default":[{` + m + `"limits":{"max_padding_bytes":0,"max_delay":0}}]}`).SessionLimits(); !ok || l != (shaping.Limits{NoPadding: true}) {
-		t.Errorf("all none %+v", l)
+	f = mk(`"quic":[{` + m + `"budget":{"wire":{}}}],"default":[{` + m + `"budget":{"wire":{}}}]}`).SessionBudget()
+	if f == nil || f() != (shaping.Budget{NoInjection: true}) {
+		t.Error("every kind allows no injection")
 	}
-	if l, ok := mk(`"quic":[{` + m + `"limits":{"max_padding_bytes":0}}],"default":[{` + m + `"limits":{"max_padding_bytes":5}}]}`).SessionLimits(); !ok || l != (shaping.Limits{MaxPaddingBytes: 5}) {
-		t.Errorf("mixed none %+v", l)
+	f = mk(`"quic":[{` + m + `"budget":{"wire":{}}}],"default":[{` + m + `"budget":{"wire":{"initial":5}}}]}`).SessionBudget()
+	if f == nil || f().Wire.Initial != 5 || f().NoInjection {
+		t.Error("one kind allowing wins over no injection")
 	}
-	if _, ok := mk(`"quic":[{` + m + `"limits":{"max_padding_bytes":1}}],"default":[{` + strings.TrimSuffix(m, ",") + `}]}`).SessionLimits(); ok {
-		t.Error("a shaped kind without limits leaves all unlimited")
+	if mk(`"quic":[{`+m+`"budget":{"wire":{"initial":1}}}],"default":[{`+strings.TrimSuffix(m, ",")+`}]}`).SessionBudget() != nil {
+		t.Error("a shaped kind without a budget leaves none")
 	}
-	if l, ok := mk(`"quic":[{` + m + `"limits":{"max_padding_bytes":1}}],"default":[{"pool":{"count":1}}]}`).SessionLimits(); !ok || l != (shaping.Limits{MaxPaddingBytes: 1}) {
-		t.Errorf("an unshaped kind is skipped: %+v %v", l, ok)
+	f = mk(`"quic":[{` + m + `"budget":{"wire":{"initial":1}}}],"default":[{"pool":{"count":1}}]}`).SessionBudget()
+	if f == nil || f().Wire.Initial != 1 {
+		t.Error("an unshaped kind adds nothing")
 	}
 }
 

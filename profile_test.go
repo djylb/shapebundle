@@ -37,11 +37,11 @@ func TestProfileSingle(t *testing.T) {
 			t.Errorf("kind %d: entry differs from the bundle's", c.k)
 		}
 	}
-	if l, ok := p.Limits(zmux.CarrierWebSocket); !ok || l.MaxInjected != 100 {
-		t.Errorf("limits %+v %v", l, ok)
+	if f := p.Budget(zmux.CarrierWebSocket); f == nil || f().Wire != (shaping.Account{Initial: 100, PerMB: 100000}) {
+		t.Errorf("websocket budget")
 	}
-	if _, ok := p.Limits(zmux.CarrierQUIC); ok {
-		t.Error("quic has no limits")
+	if p.Budget(zmux.CarrierQUIC) != nil {
+		t.Error("quic has no budget")
 	}
 	pp := p.PoolPolicy(zmux.CarrierWebSocket)
 	if pp == nil {
@@ -79,7 +79,7 @@ func TestProfileHandshake(t *testing.T) {
 }
 
 func TestProfileOrder(t *testing.T) {
-	local := mustParse(t, `{"generated_at":"2026-01-01T00:00:00Z","kinds":{"default":[{"limits":{"max_injected":1}}]}}`)
+	local := mustParse(t, `{"generated_at":"2026-01-01T00:00:00Z","kinds":{"default":[{"budget":{"wire":{"initial":1}}}]}}`)
 	remote := mustParse(t, bundleJSON(""))
 	byLayer, _ := NewProfile(ProfileOptions{Order: ByLayer}, nil, local, remote)
 	byKind, _ := NewProfile(ProfileOptions{Order: ByKind}, local, remote)
