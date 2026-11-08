@@ -1,0 +1,3 @@
+# Local Go workspace (points at local zmux-go before its release); never published.
+go.work
+go.work.sum
