@@ -30,7 +30,7 @@ func TestProfileSingle(t *testing.T) {
 		k      zmux.CarrierKind
 		shaped bool
 	}{{zmux.CarrierWebSocket, true}, {zmux.CarrierQUIC, true}, {zmux.CarrierSplit, false}, {zmux.CarrierHTTP3, true}, {0, true}} {
-		if got := p.Shaper(zmux.ShapedPipe{ID: 1, Carrier: c.k}) != nil; got != c.shaped {
+		if got := p.Shaper(zmux.ShapedPipe{PipeID: 1, Carrier: c.k}) != nil; got != c.shaped {
 			t.Errorf("kind %d: shaped %v", c.k, got)
 		}
 		if p.Entry(c.k) != b.Entry(c.k) {
