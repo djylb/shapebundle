@@ -26,9 +26,19 @@ import (
 const (
 	DefaultCacheName = "bundle.json"
 	DefaultTimeout   = 30 * time.Second
-	DefaultRetryMin  = 30 * time.Second
+	DefaultRetryMin  = 30 * time.Second //nolint:revive // exported name; the Min/Max suffix pairs with the RetryMin and RetryMax fields
 	DefaultRetryMax  = time.Hour
 	DefaultMaxSkew   = time.Hour
+)
+
+// Configuration errors of NewFetcher; the messages carry the values that
+// do not fit.
+var (
+	errNoURL            = errors.New("shapebundle: no URL")
+	errBodyNotJSON      = errors.New("shapebundle: request body is not JSON")
+	errNegativeDuration = errors.New("shapebundle: negative duration")
+	errRetryRange       = errors.New("shapebundle: RetryMax below RetryMin")
+	errCacheName        = errors.New("shapebundle: cache name")
 )
 
 // ErrNoBundle reports that a Fetcher has no bundle: none is cached and
@@ -120,16 +130,16 @@ type Fetcher struct {
 // NewFetcher returns a Fetcher for c.
 func NewFetcher(c FetcherConfig) (*Fetcher, error) {
 	if c.URL == "" {
-		return nil, errors.New("shapebundle: no URL")
+		return nil, errNoURL
 	}
 	if c.Body != nil && !json.Valid(c.Body) {
-		return nil, errors.New("shapebundle: request body is not JSON")
+		return nil, errBodyNotJSON
 	}
 	if c.PublicKey != nil && len(c.PublicKey) != ed25519.PublicKeySize {
-		return nil, fmt.Errorf("shapebundle: public key of %d bytes, want %d", len(c.PublicKey), ed25519.PublicKeySize)
+		return nil, publicKeySizeError(len(c.PublicKey))
 	}
 	if c.Jitter < 0 || c.Interval < 0 || c.MinInterval < 0 || c.RetryMin < 0 || c.RetryMax < 0 {
-		return nil, errors.New("shapebundle: negative duration")
+		return nil, errNegativeDuration
 	}
 	if c.RetryMin == 0 {
 		c.RetryMin = DefaultRetryMin
@@ -138,7 +148,7 @@ func NewFetcher(c FetcherConfig) (*Fetcher, error) {
 		c.RetryMax = max(DefaultRetryMax, c.RetryMin)
 	}
 	if c.RetryMax < c.RetryMin {
-		return nil, errors.New("shapebundle: RetryMax below RetryMin")
+		return nil, errRetryRange
 	}
 	if c.MaxSkew == 0 {
 		c.MaxSkew = DefaultMaxSkew
@@ -150,7 +160,7 @@ func NewFetcher(c FetcherConfig) (*Fetcher, error) {
 		c.CacheName = DefaultCacheName
 	}
 	if c.CacheName != filepath.Base(c.CacheName) || c.CacheName == "." || c.CacheName == ".." {
-		return nil, fmt.Errorf("shapebundle: cache name %q is not a file name", c.CacheName)
+		return nil, fmt.Errorf("%w %q is not a file name", errCacheName, c.CacheName)
 	}
 	f := &Fetcher{
 		c:       c,
@@ -312,8 +322,8 @@ func (f *Fetcher) fetch(ctx context.Context) ([]byte, error) {
 // writeAtomic replaces path with b: a temporary file in dir, synced, then
 // renamed over path; the file is 0600 and dir is created 0700.
 func writeAtomic(dir, path string, b []byte) (err error) {
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
+	if mkErr := os.MkdirAll(dir, 0o700); mkErr != nil {
+		return mkErr
 	}
 	t, err := os.CreateTemp(dir, ".bundle-*.tmp")
 	if err != nil {
@@ -349,7 +359,7 @@ func syncDir(dir string) {
 	if runtime.GOOS == "windows" {
 		return
 	}
-	if d, err := os.Open(dir); err == nil {
+	if d, err := os.Open(dir); err == nil { //nolint:gosec // G304: dir is the cache directory the caller configured
 		_ = d.Sync()
 		_ = d.Close()
 	}
@@ -458,5 +468,5 @@ func randDuration(d time.Duration) time.Duration {
 	if d <= 0 {
 		return 0
 	}
-	return rand.N(d)
+	return rand.N(d) //nolint:gosec // G404: jitter spreads requests out; it is not a secret
 }

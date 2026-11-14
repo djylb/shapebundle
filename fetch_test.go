@@ -35,6 +35,7 @@ type server struct {
 }
 
 func newServer(t *testing.T, body func() string) *server {
+	t.Helper()
 	s := &server{t: t, status: 200, body: body}
 	_, s.key, _ = ed25519.GenerateKey(nil)
 	s.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -87,6 +88,7 @@ func (s *server) config(dir string) FetcherConfig {
 }
 
 func ctxT(t *testing.T) context.Context {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	t.Cleanup(cancel)
 	return ctx
@@ -99,8 +101,8 @@ func TestFetcherRefreshAndLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.Load(); !errors.Is(err, fs.ErrNotExist) {
-		t.Fatalf("empty cache: %v", err)
+	if _, loadErr := f.Load(); !errors.Is(loadErr, fs.ErrNotExist) {
+		t.Fatalf("empty cache: %v", loadErr)
 	}
 	b, err := f.Refresh(ctxT(t))
 	if err != nil {
@@ -194,7 +196,7 @@ func TestFetcherConfig(t *testing.T) {
 
 func TestFetcherContext(t *testing.T) {
 	block := make(chan struct{})
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		select {
 		case <-block:
 		case <-r.Context().Done():

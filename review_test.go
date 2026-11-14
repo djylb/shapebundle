@@ -112,7 +112,7 @@ func TestFetcherGeneratedAtRules(t *testing.T) {
 	}
 
 	// Load keeps a newer current bundle.
-	old := strings.Replace(bundleJSON(""), "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z", 1)
+	old := bundleJSON("")
 	cur := f.Current()
 	if err := os.WriteFile(cache, []byte(old), 0o600); err != nil {
 		t.Fatal(err)

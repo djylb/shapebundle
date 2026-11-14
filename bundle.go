@@ -10,12 +10,16 @@
 package shapebundle
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
 
 	"github.com/zmuxio/zmux-go/shaping/bundle"
 )
+
+// errTooLarge is the base of the error for input beyond its byte limit.
+var errTooLarge = errors.New("shapebundle: input too large")
 
 // readAll reads r, refusing more than limit bytes (-1: no bound).
 func readAll(r io.Reader, limit int, what string) ([]byte, error) {
@@ -27,7 +31,7 @@ func readAll(r io.Reader, limit int, what string) ([]byte, error) {
 		return nil, err
 	}
 	if len(b) > limit {
-		return nil, fmt.Errorf("shapebundle: %s: more than %d bytes", what, limit)
+		return nil, fmt.Errorf("%w: %s: more than %d bytes", errTooLarge, what, limit)
 	}
 	return b, nil
 }
@@ -47,7 +51,7 @@ func ParseFile(path string, o bundle.ParseOptions) (*bundle.Bundle, error) {
 
 // readBounded reads the file at path, refusing one of more than limit bytes.
 func readBounded(path string, limit int) ([]byte, error) {
-	f, err := os.Open(path)
+	f, err := os.Open(path) //nolint:gosec // G304: the caller names the bundle file
 	if err != nil {
 		return nil, err
 	}

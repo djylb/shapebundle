@@ -1,0 +1,77 @@
+version: "2"
+
+linters:
+  default: all
+  disable:
+    # Formatting and naming style that gofmt and the code's idiom already
+    # settle: blank-line placement, short names in short scopes, the
+    # if err := f(); err != nil form, embedded-field spacing.
+    - wsl
+    - wsl_v5
+    - nlreturn
+    - varnamelen
+    - noinlineerr
+    - embeddedstructfieldcheck
+    - lll
+    # Zero values are ready to use; literals name only the fields they set.
+    - exhaustruct
+    - exhaustruct_v5
+    # Methods are ordered by topic, next to the code they serve.
+    - funcorder
+    # Deprecated, replaced by gomodguard_v2.
+    - gomodguard
+    # No import rules.
+    - depguard
+    # Validation and the fetch loop read top to bottom in one function,
+    # and the tests spell out their steps.
+    - cyclop
+    # The tests use the package's unexported state, and they share one
+    # fake server and the goroutine accounting of TestMain, so they run
+    # one after another.
+    - testpackage
+    - paralleltest
+    - tparallel
+    # Errors of the files, the network and the bundle package reach the
+    # caller as they are, so that errors.Is and errors.As see their types;
+    # Shaper and PoolPolicy are the zmux interfaces the profile hands out.
+    - ireturn
+    - wrapcheck
+    # File modes and sizes are named where they are used.
+    - mnd
+  settings:
+    thelper:
+      tb:
+        # The helpers take the same t as the tests do.
+        name: false
+    govet:
+      enable-all: true
+      disable:
+        # Checked on its own, as fieldalignment; what remains are
+        # pointer-byte reports, for which fields keep their order of
+        # meaning.
+        - fieldalignment
+    exhaustive:
+      default-signifies-exhaustive: true
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+  exclusions:
+    rules:
+      # Tests repeat literal URLs and keep shared fixtures in package
+      # variables.
+      - path: _test\.go
+        linters:
+          - goconst
+          - gochecknoglobals
+          - forcetypeassert
+          - funlen
+      # Tests open files of their own temporary directories and run the go
+      # tool by name.
+      - path: _test\.go
+        linters:
+          - gosec
+        text: "G304|G404|G204"
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

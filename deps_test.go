@@ -13,7 +13,7 @@ func TestDependencies(t *testing.T) {
 	if err != nil {
 		t.Skip("no go command")
 	}
-	out, err := exec.Command(goCmd, "list", "-deps", "-test", "-f", "{{.ImportPath}}|{{.Standard}}|{{with .Module}}{{.Path}}{{end}}", "./...").Output()
+	out, err := exec.CommandContext(t.Context(), goCmd, "list", "-deps", "-test", "-f", "{{.ImportPath}}|{{.Standard}}|{{with .Module}}{{.Path}}{{end}}", "./...").Output()
 	if err != nil {
 		t.Fatalf("go list: %v", err)
 	}

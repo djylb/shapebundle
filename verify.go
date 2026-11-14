@@ -15,10 +15,18 @@ const SignatureHeader = "X-Bundle-Signature"
 // ErrSignature reports a missing or invalid signature.
 var ErrSignature = errors.New("shapebundle: bad signature")
 
+// errPublicKey is the base of the error for a public key of the wrong size.
+var errPublicKey = errors.New("shapebundle: public key")
+
+// publicKeySizeError reports a public key of n bytes.
+func publicKeySizeError(n int) error {
+	return fmt.Errorf("%w of %d bytes, want %d", errPublicKey, n, ed25519.PublicKeySize)
+}
+
 // Verify checks sig, the hex Ed25519 signature of body, against pub.
 func Verify(pub ed25519.PublicKey, body []byte, sig string) error {
 	if len(pub) != ed25519.PublicKeySize {
-		return fmt.Errorf("shapebundle: public key of %d bytes, want %d", len(pub), ed25519.PublicKeySize)
+		return publicKeySizeError(len(pub))
 	}
 	sig = strings.TrimSpace(sig)
 	if sig == "" {
@@ -29,7 +37,7 @@ func Verify(pub ed25519.PublicKey, body []byte, sig string) error {
 	}
 	s, err := hex.DecodeString(sig)
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrSignature, err)
+		return fmt.Errorf("%w: %w", ErrSignature, err)
 	}
 	if !ed25519.Verify(pub, body, s) {
 		return ErrSignature
@@ -44,7 +52,7 @@ func ParsePublicKey(s string) (ed25519.PublicKey, error) {
 		return nil, fmt.Errorf("shapebundle: public key: %w", err)
 	}
 	if len(b) != ed25519.PublicKeySize {
-		return nil, fmt.Errorf("shapebundle: public key of %d bytes, want %d", len(b), ed25519.PublicKeySize)
+		return nil, publicKeySizeError(len(b))
 	}
 	return b, nil
 }
