@@ -3,7 +3,6 @@ package shapebundle
 import (
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/zmuxio/zmux-go/shaping/bundle"
 
@@ -48,7 +47,9 @@ func TestProfileSingle(t *testing.T) {
 		t.Fatal("no policy")
 	}
 	var d zmux.PoolDecision
-	pp.Decide(&zmux.PoolView{Now: time.Now()}, &d)
+	if err := pp.Decide(&zmux.PoolView{}, &d); err != nil {
+		t.Fatal(err)
+	}
 	if d.Count != 2 {
 		t.Errorf("count %d", d.Count)
 	}
@@ -102,7 +103,9 @@ func TestSwitch(t *testing.T) {
 	pp := s.PoolPolicy(zmux.CarrierWebSocket)
 	decide := func() int {
 		var d zmux.PoolDecision
-		pp.Decide(&zmux.PoolView{Now: time.Now()}, &d)
+		if err := pp.Decide(&zmux.PoolView{}, &d); err != nil {
+			t.Fatal(err)
+		}
 		return d.Count
 	}
 	if f(zmux.ShapedPipe{Carrier: zmux.CarrierQUIC}) != nil || decide() != 0 {

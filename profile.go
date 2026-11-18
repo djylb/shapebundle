@@ -243,7 +243,7 @@ type switchPolicy struct {
 	inner zmux.PoolPolicy
 }
 
-func (sp *switchPolicy) Decide(v *zmux.PoolView, d *zmux.PoolDecision) {
+func (sp *switchPolicy) Decide(v *zmux.PoolView, d *zmux.PoolDecision) error {
 	p := sp.s.p.Load()
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
@@ -253,7 +253,8 @@ func (sp *switchPolicy) Decide(v *zmux.PoolView, d *zmux.PoolDecision) {
 			sp.inner = p.PoolPolicy(sp.k)
 		}
 	}
-	if sp.inner != nil {
-		sp.inner.Decide(v, d)
+	if sp.inner == nil {
+		return nil
 	}
+	return sp.inner.Decide(v, d)
 }
