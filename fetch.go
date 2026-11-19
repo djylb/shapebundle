@@ -120,11 +120,49 @@ type Fetcher struct {
 	c       FetcherConfig
 	clock   timeshim.Clock
 	client  *http.Client
-	cache   string // cache file path; "": no cache
-	mu      sync.Mutex
-	last    time.Time // last successful fetch on clock, under mu
+	cache   string     // cache file path; "": no cache
+	mu      sync.Mutex // serializes Load and Refresh
 	current atomic.Pointer[bundle.Bundle]
 	changed chan struct{} // wakes Run after Load or Refresh
+	// sm guards status apart from mu, so that Status does not wait for a
+	// fetch in progress.
+	sm     sync.Mutex
+	status Status
+}
+
+// Status is a snapshot of a Fetcher's fetches by Refresh and Run, for
+// display. Load does not change it.
+type Status struct {
+	// LastSuccess is when the last successful Refresh ended; zero: none.
+	// Interval and MinInterval count from it.
+	LastSuccess time.Time
+	// LastErrorAt is when the last failed Refresh ended; zero: none since
+	// the last success.
+	LastErrorAt time.Time
+	// LastError is the error of that Refresh; nil: none since the last
+	// success. A Refresh whose ctx has ended by the time it returns is not
+	// recorded; one that runs out of Timeout is.
+	LastError error
+	// Next is when Run fetches next, a retry or a refresh, jitter
+	// included; zero: Run is not running or has no fetch scheduled. It
+	// may lie in the past while that fetch is in progress, and Run sets
+	// it anew after a Load or Refresh by the caller. With more than one
+	// Run at a time it is that of whichever scheduled last.
+	Next time.Time
+}
+
+// Status returns a snapshot of f's fetches. It does not wait for a fetch
+// in progress.
+func (f *Fetcher) Status() Status {
+	f.sm.Lock()
+	defer f.sm.Unlock()
+	return f.status
+}
+
+func (f *Fetcher) updateStatus(u func(*Status)) {
+	f.sm.Lock()
+	defer f.sm.Unlock()
+	u(&f.status)
 }
 
 // NewFetcher returns a Fetcher for c.
@@ -243,10 +281,19 @@ func (f *Fetcher) baseLocked() *bundle.Bundle {
 // A future bundle is never taken, so it cannot block later ones; a cache
 // from the future is ignored as a base and refused by Load, and is
 // replaced by the next successful Refresh. On any failure the current and cached
-// bundles stay as they were.
+// bundles stay as they were. The outcome is recorded in Status.
 func (f *Fetcher) Refresh(ctx context.Context) (*bundle.Bundle, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	b, err := f.refreshLocked(ctx)
+	if err != nil && ctx.Err() == nil {
+		now := f.clock.Now()
+		f.updateStatus(func(s *Status) { s.LastError, s.LastErrorAt = err, now })
+	}
+	return b, err
+}
+
+func (f *Fetcher) refreshLocked(ctx context.Context) (*bundle.Bundle, error) {
 	raw, err := f.fetch(ctx)
 	if err != nil {
 		return nil, err
@@ -263,7 +310,8 @@ func (f *Fetcher) Refresh(ctx context.Context) (*bundle.Bundle, error) {
 			return nil, err
 		}
 	}
-	f.last = f.clock.Now()
+	now := f.clock.Now()
+	f.updateStatus(func(s *Status) { s.LastSuccess, s.LastError, s.LastErrorAt = now, nil, time.Time{} })
 	f.setLocked(b)
 	return b, nil
 }
@@ -372,11 +420,17 @@ func syncDir(dir string) {
 // up to Jitter. A failed fetch keeps the current bundle and is retried
 // with backoff. A Load or Refresh by the caller reschedules Run. Run
 // starts no goroutine of its own besides the clock's timers, which it
-// stops before it returns.
+// stops before it returns. Status reports when it fetches next.
 func (f *Fetcher) Run(ctx context.Context) error {
+	defer f.updateStatus(func(s *Status) { s.Next = time.Time{} })
 	failures := 0
 	for {
 		d, ok := f.delay(failures)
+		var next time.Time
+		if ok {
+			next = f.clock.Now().Add(d)
+		}
+		f.updateStatus(func(s *Status) { s.Next = next })
 		var t timeshim.Timer
 		// A channel per round: a timer stopped late cannot wake a later
 		// round early.
@@ -438,9 +492,7 @@ func (f *Fetcher) delay(failures int) (time.Duration, bool) {
 	if b == nil {
 		return randDuration(f.c.Jitter), true
 	}
-	f.mu.Lock()
-	last := f.last
-	f.mu.Unlock()
+	last := f.Status().LastSuccess
 	now := f.clock.Now()
 	var d time.Duration
 	switch next := b.NextChange(); {

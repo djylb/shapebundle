@@ -255,9 +255,13 @@ func TestFetcherRun(t *testing.T) {
 	c.RetryMin, c.RetryMax = 10*time.Second, 40*time.Second
 	updates := make(chan *bundle.Bundle, 16)
 	errs := make(chan error, 16)
-	c.OnUpdate = func(b *bundle.Bundle) { updates <- b }
+	var f *Fetcher
+	c.OnUpdate = func(b *bundle.Bundle) {
+		_ = f.Status() // must not deadlock
+		updates <- b
+	}
 	c.OnError = func(err error) { errs <- err }
-	f, _ := NewFetcher(c)
+	f, _ = NewFetcher(c)
 	ctx, cancel := context.WithCancel(ctxT(t))
 	done := make(chan error, 1)
 	go func() { done <- f.Run(ctx) }()
@@ -270,6 +274,9 @@ func TestFetcherRun(t *testing.T) {
 		d := clock.Deadlines()
 		if len(d) != 1 {
 			t.Fatalf("%d timers", len(d))
+		}
+		if got := f.Status().Next; !got.Equal(d[0]) {
+			t.Fatalf("Next %v, timer at %v", got, d[0])
 		}
 		return d[0]
 	}
@@ -298,11 +305,19 @@ func TestFetcherRun(t *testing.T) {
 		t.Fatalf("fetch at %v, next_change %v", at, b.NextChange())
 	}
 
+	if st := f.Status(); !st.LastSuccess.Equal(clock.Now()) || st.LastError != nil || !st.LastErrorAt.IsZero() {
+		t.Fatalf("status after success: %+v", st)
+	}
+	success := clock.Now()
+
 	// Failures retry with backoff: [5, 10) s, then [10, 20) s.
 	s.set(func(s *server) { s.status = 500 })
 	clock.AdvanceTo(at)
 	if err := <-errs; err != nil {
 		t.Log(err)
+	}
+	if st := f.Status(); !st.LastSuccess.Equal(success) || st.LastError == nil || !st.LastErrorAt.Equal(clock.Now()) {
+		t.Fatalf("status after failure: %+v", st)
 	}
 	for _, want := range []time.Duration{10 * time.Second, 20 * time.Second} {
 		at = next()
@@ -320,6 +335,9 @@ func TestFetcherRun(t *testing.T) {
 	if f.Current() == b {
 		t.Error("not replaced")
 	}
+	if st := f.Status(); st.LastError != nil || !st.LastErrorAt.IsZero() || !st.LastSuccess.Equal(clock.Now()) {
+		t.Errorf("status after recovery: %+v", st)
+	}
 
 	// A Load by the caller reschedules Run.
 	if _, err := f.Load(); err != nil {
@@ -334,6 +352,9 @@ func TestFetcherRun(t *testing.T) {
 	}
 	if n := clock.Pending(); n != 0 {
 		t.Errorf("%d timers left", n)
+	}
+	if st := f.Status(); !st.Next.IsZero() {
+		t.Errorf("Next %v after Run returned", st.Next)
 	}
 }
 
@@ -387,5 +408,54 @@ func TestFetcherRunPassedNextChange(t *testing.T) {
 	cancel()
 	if err := <-done; err != nil {
 		t.Log(err)
+	}
+}
+
+// TestFetcherStatus checks what Refresh and Load record in Status.
+func TestFetcherStatus(t *testing.T) {
+	clock := timeshim.NewFake(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+	s := newServer(t, func() string { return bundleJSON("") })
+	c := s.config(t.TempDir())
+	c.Clock = clock
+	f, _ := NewFetcher(c)
+	if st := f.Status(); st != (Status{}) {
+		t.Fatalf("initial status %+v", st)
+	}
+	if _, err := f.Refresh(ctxT(t)); err != nil {
+		t.Fatal(err)
+	}
+	ok := clock.Now()
+
+	clock.Advance(time.Minute)
+	s.set(func(s *server) { s.status = 503 })
+	if _, err := f.Refresh(ctxT(t)); err == nil {
+		t.Fatal("Refresh succeeded on 503")
+	}
+	var se *StatusError
+	st := f.Status()
+	if !st.LastSuccess.Equal(ok) || !errors.As(st.LastError, &se) || se.Code != 503 || !st.LastErrorAt.Equal(clock.Now()) {
+		t.Fatalf("status after failure: %+v", st)
+	}
+
+	// A Refresh ended by its context and a Load leave it.
+	ctx, cancel := context.WithCancel(ctxT(t))
+	cancel()
+	if _, err := f.Refresh(ctx); err == nil {
+		t.Fatal("Refresh with a done context succeeded")
+	}
+	if _, err := f.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.Status(); got != st {
+		t.Fatalf("status %+v, want %+v", got, st)
+	}
+
+	clock.Advance(time.Minute)
+	s.set(func(s *server) { s.status = 200 })
+	if _, err := f.Refresh(ctxT(t)); err != nil {
+		t.Fatal(err)
+	}
+	if st := f.Status(); !st.LastSuccess.Equal(clock.Now()) || st.LastError != nil || !st.LastErrorAt.IsZero() || !st.Next.IsZero() {
+		t.Fatalf("status after recovery: %+v", st)
 	}
 }
