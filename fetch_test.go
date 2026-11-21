@@ -242,10 +242,41 @@ func TestVerify(t *testing.T) {
 	}
 }
 
+// armClock is a fake clock that reports each timer armed through AfterFunc,
+// so a test can wait for Run's reschedule instead of guessing from the
+// pending timers.
+type armClock struct {
+	*timeshim.Fake
+	armed chan struct{}
+}
+
+func (c *armClock) AfterFunc(d time.Duration, f func()) timeshim.Timer {
+	t := c.Fake.AfterFunc(d, f)
+	c.armed <- struct{}{}
+	return t
+}
+
+// forget drops the arms reported so far.
+func (c *armClock) forget() {
+	for len(c.armed) > 0 {
+		<-c.armed
+	}
+}
+
+// waitArmed waits for a timer armed since forget.
+func (c *armClock) waitArmed(t *testing.T) {
+	t.Helper()
+	select {
+	case <-c.armed:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not reschedule")
+	}
+}
+
 // TestFetcherRun drives Run with a fake clock: a fetch at once, then at
 // each next_change, retries with backoff, and no timer left at the end.
 func TestFetcherRun(t *testing.T) {
-	clock := timeshim.NewFake(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+	clock := &armClock{Fake: timeshim.NewFake(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)), armed: make(chan struct{}, 64)}
 	s := newServer(t, func() string {
 		return bundleJSON(clock.Now().Add(time.Hour).Format(time.RFC3339))
 	})
@@ -339,11 +370,16 @@ func TestFetcherRun(t *testing.T) {
 		t.Errorf("status after recovery: %+v", st)
 	}
 
-	// A Load by the caller reschedules Run.
+	// A Load by the caller reschedules Run. Let Run settle on its timer
+	// first, then wait for the timer that replaces it: until Run has taken
+	// the signal, the old timer is still pending and then briefly none is.
+	next()
+	clock.forget()
 	if _, err := f.Load(); err != nil {
 		t.Fatal(err)
 	}
 	recv(updates)
+	clock.waitArmed(t)
 	next()
 
 	cancel()
