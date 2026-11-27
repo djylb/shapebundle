@@ -26,7 +26,7 @@ import (
 const (
 	DefaultCacheName = "bundle.json"
 	DefaultTimeout   = 30 * time.Second
-	DefaultRetryMin  = 30 * time.Second //nolint:revive // exported name; the Min/Max suffix pairs with the RetryMin and RetryMax fields
+	DefaultRetryMin  = 30 * time.Second //nolint:revive // Min means minimum in this exported name, as in FetcherConfig.RetryMin.
 	DefaultRetryMax  = time.Hour
 	DefaultMaxSkew   = time.Hour
 )
@@ -407,7 +407,7 @@ func syncDir(dir string) {
 	if runtime.GOOS == "windows" {
 		return
 	}
-	if d, err := os.Open(dir); err == nil { //nolint:gosec // G304: dir is the cache directory the caller configured
+	if d, err := os.Open(dir); err == nil { //nolint:gosec // G304 flags the caller-configured cache directory that needs syncing.
 		_ = d.Sync()
 		_ = d.Close()
 	}
@@ -520,5 +520,5 @@ func randDuration(d time.Duration) time.Duration {
 	if d <= 0 {
 		return 0
 	}
-	return rand.N(d) //nolint:gosec // G404: jitter spreads requests out; it is not a secret
+	return rand.N(d) //nolint:gosec // G404 flags randomness used only to spread scheduled fetches and retries.
 }

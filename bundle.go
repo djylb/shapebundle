@@ -51,7 +51,7 @@ func ParseFile(path string, o bundle.ParseOptions) (*bundle.Bundle, error) {
 
 // readBounded reads the file at path, refusing one of more than limit bytes.
 func readBounded(path string, limit int) ([]byte, error) {
-	f, err := os.Open(path) //nolint:gosec // G304: the caller names the bundle file
+	f, err := os.Open(path) //nolint:gosec // G304 flags the file that ParseFile is explicitly asked to read.
 	if err != nil {
 		return nil, err
 	}
