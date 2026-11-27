@@ -45,11 +45,6 @@ linters:
         name: false
     govet:
       enable-all: true
-      disable:
-        # Checked on its own, as fieldalignment; what remains are
-        # pointer-byte reports, for which fields keep their order of
-        # meaning.
-        - fieldalignment
     exhaustive:
       default-signifies-exhaustive: true
     nolintlint:
@@ -57,6 +52,10 @@ linters:
       require-specific: true
   exclusions:
     rules:
+      # Keep field order when a change would only reduce pointer data.
+      - linters:
+          - govet
+        text: 'fieldalignment: .* has [0-9]+ leading bytes of pointer data but optimal value is [0-9]+'
       # Tests repeat literal URLs and keep shared fixtures in package
       # variables.
       - path: _test\.go

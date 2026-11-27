@@ -28,7 +28,13 @@ func TestProfileSingle(t *testing.T) {
 	for _, c := range []struct {
 		k      zmux.CarrierKind
 		shaped bool
-	}{{zmux.CarrierWebSocket, true}, {zmux.CarrierQUIC, true}, {zmux.CarrierSplit, false}, {zmux.CarrierHTTP3, true}, {0, true}} {
+	}{
+		{k: zmux.CarrierWebSocket, shaped: true},
+		{k: zmux.CarrierQUIC, shaped: true},
+		{k: zmux.CarrierSplit, shaped: false},
+		{k: zmux.CarrierHTTP3, shaped: true},
+		{k: 0, shaped: true},
+	} {
 		if got := p.Shaper(zmux.ShapedPipe{PipeID: 1, Carrier: c.k}) != nil; got != c.shaped {
 			t.Errorf("kind %d: shaped %v", c.k, got)
 		}
