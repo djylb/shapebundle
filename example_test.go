@@ -82,7 +82,7 @@ func ExampleLoadDir() {
 		return
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
-	if err := os.WriteFile(filepath.Join(dir, "10-base.json"), []byte(exampleBundle), 0o600); err != nil {
+	if err = os.WriteFile(filepath.Join(dir, "10-base.json"), []byte(exampleBundle), 0o600); err != nil {
 		fmt.Println(err)
 		return
 	}
