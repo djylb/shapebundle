@@ -7,6 +7,7 @@ import (
 	"github.com/zmuxio/zmux-go/shaping/bundle"
 
 	"github.com/zmuxio/zmux-go"
+	"github.com/zmuxio/zmux-go/carrier"
 	"github.com/zmuxio/zmux-go/shaping"
 )
 
@@ -42,28 +43,38 @@ func TestProfileSingle(t *testing.T) {
 			t.Errorf("kind %d: entry differs from the bundle's", c.k)
 		}
 	}
-	if f := p.Budget(zmux.CarrierWebSocket); f == nil || f().Wire != (shaping.Account{Initial: 100, PerMB: 100000}) {
+	if f := p.Budget(zmux.CarrierWebSocket); f == nil || f().Wire == nil || *f().Wire != (shaping.Account{Ceiling: 2000, Initial: 1000, PerMB: 100000}) {
 		t.Errorf("websocket budget")
 	}
 	if p.Budget(zmux.CarrierQUIC) != nil {
 		t.Error("quic has no budget")
 	}
-	pp := p.PoolPolicy(zmux.CarrierWebSocket)
+	pp := p.ConnectionPolicy(zmux.CarrierWebSocket)
 	if pp == nil {
 		t.Fatal("no policy")
 	}
-	var d zmux.PoolDecision
-	if err := pp.Decide(&zmux.PoolView{}, &d); err != nil {
+	var d carrier.ConnectionDecision
+	if err := pp.Decide(&carrier.ConnectionView{}, &d); err != nil {
 		t.Fatal(err)
 	}
 	if d.Count != 2 {
 		t.Errorf("count %d", d.Count)
 	}
-	if pp := p.PoolPolicy(zmux.CarrierQUIC); pp != nil {
+	if pp := p.ConnectionPolicy(zmux.CarrierQUIC); pp != nil {
 		t.Errorf("quic pool %v", pp)
 	}
 	if p.Factory()(zmux.ShapedPipe{Carrier: zmux.CarrierSplit}) != nil {
 		t.Error("Factory")
+	}
+	if pol := p.Policy(zmux.CarrierWebSocket); pol.Factory == nil || pol.Handshake == nil || pol.Budget == nil {
+		t.Errorf("policy %+v", pol)
+	}
+	if pol := p.Policy(zmux.CarrierQUIC); pol.Budget != nil {
+		t.Error("quic policy has a budget")
+	}
+	// A raw carrier has no entry of its own: it takes the default one.
+	if p.Shaper(zmux.ShapedPipe{Carrier: zmux.CarrierKind(8)}) == nil {
+		t.Error("a raw carrier is not shaped by the default entry")
 	}
 }
 
@@ -71,7 +82,7 @@ func TestProfileHandshake(t *testing.T) {
 	plan := func(n string) string {
 		return `[{"handshakes":{"establish":{"hello":{"pad":` + n + `}}}}]`
 	}
-	p, err := NewProfile(ProfileOptions{}, mustParse(t, `{"kinds":{"default":`+plan("5")+`,"websocket":`+plan("7")+`}}`))
+	p, err := NewProfile(ProfileOptions{}, mustParse(t, `{"schema":2,"kinds":{"default":`+plan("5")+`,"websocket":`+plan("7")+`}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +97,7 @@ func TestProfileHandshake(t *testing.T) {
 }
 
 func TestProfileOrder(t *testing.T) {
-	local := mustParse(t, `{"generated_at":"2026-01-01T00:00:00Z","kinds":{"default":[{"budget":{"wire":{"initial":1}}}]}}`)
+	local := mustParse(t, `{"schema":2,"generated_at":"2026-01-01T00:00:00Z","kinds":{"default":[{"budget":{"wire":{"ceiling":1,"initial":1}}}]}}`)
 	remote := mustParse(t, bundleJSON(""))
 	byLayer, _ := NewProfile(ProfileOptions{Order: ByLayer}, nil, local, remote)
 	byKind, _ := NewProfile(ProfileOptions{Order: ByKind}, local, remote)
@@ -106,10 +117,10 @@ func TestProfileOrder(t *testing.T) {
 func TestSwitch(t *testing.T) {
 	var s Switch
 	f := s.Factory()
-	pp := s.PoolPolicy(zmux.CarrierWebSocket)
+	pp := s.ConnectionPolicy(zmux.CarrierWebSocket)
 	decide := func() int {
-		var d zmux.PoolDecision
-		if err := pp.Decide(&zmux.PoolView{}, &d); err != nil {
+		var d carrier.ConnectionDecision
+		if err := pp.Decide(&carrier.ConnectionView{}, &d); err != nil {
 			t.Fatal(err)
 		}
 		return d.Count

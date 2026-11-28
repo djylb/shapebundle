@@ -19,7 +19,7 @@ f.Load()
 go f.Run(ctx)
 
 p, _ := shapebundle.NewProfile(shapebundle.ProfileOptions{}, f.Current())
-cfg.Shaper = p.Factory()
+cfg.Shaping = p.Policy(zmux.CarrierWebSocket) // the kind the session starts on
 ```
 
 See the package documentation for details.

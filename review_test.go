@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/djylb/timeshim"
-	"github.com/zmuxio/zmux-go/shaping"
 	"github.com/zmuxio/zmux-go/shaping/bundle"
 )
 
@@ -50,40 +49,6 @@ func TestRefreshRejectsOlder(t *testing.T) {
 	raw, _ := os.ReadFile(filepath.Join(dir, DefaultCacheName))
 	if f.Current() != cur || string(raw) != string(b.Raw()) {
 		t.Error("older bundle taken")
-	}
-}
-
-func TestSessionBudget(t *testing.T) {
-	m := `"machines":[{"start":0,"states":[{}]}],`
-	mk := func(kinds string) *Profile {
-		t.Helper()
-		b := mustParse(t, `{"generated_at":"2026-01-01T00:00:00Z","kinds":{`+kinds+`}`)
-		p, err := NewProfile(ProfileOptions{}, b)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return p
-	}
-	f := mk(`"quic":[{` + m + `"budget":{"wire":{"initial":10,"per_mb":100000},"max_delay":2000000}}],` +
-		`"default":[{` + m + `"budget":{"wire":{"initial":30,"per_mb":50000},"max_delay":1000000}}]}`).SessionBudget()
-	want := shaping.Budget{Wire: shaping.Account{Initial: 30, PerMB: 100000}, MaxDelay: 2 * time.Second}
-	if f == nil || f() != want {
-		t.Error("widest over the kinds")
-	}
-	f = mk(`"quic":[{` + m + `"budget":{"wire":{}}}],"default":[{` + m + `"budget":{"wire":{}}}]}`).SessionBudget()
-	if f == nil || f() != (shaping.Budget{NoInjection: true}) {
-		t.Error("every kind allows no injection")
-	}
-	f = mk(`"quic":[{` + m + `"budget":{"wire":{}}}],"default":[{` + m + `"budget":{"wire":{"initial":5}}}]}`).SessionBudget()
-	if f == nil || f().Wire.Initial != 5 || f().NoInjection {
-		t.Error("one kind allowing wins over no injection")
-	}
-	if mk(`"quic":[{`+m+`"budget":{"wire":{"initial":1}}}],"default":[{`+strings.TrimSuffix(m, ",")+`}]}`).SessionBudget() != nil {
-		t.Error("a shaped kind without a budget leaves none")
-	}
-	f = mk(`"quic":[{` + m + `"budget":{"wire":{"initial":1}}}],"default":[{"pool":{"count":1}}]}`).SessionBudget()
-	if f == nil || f().Wire.Initial != 1 {
-		t.Error("an unshaped kind adds nothing")
 	}
 }
 
