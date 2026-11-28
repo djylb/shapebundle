@@ -19,7 +19,7 @@ import (
 )
 
 // A minimal bundle with only the default kind.
-const exampleBundle = `{"schema":2,"generated_at":"2026-01-01T00:00:00Z","next_change":null,"kinds":{` +
+const exampleBundle = `{"generated_at":"2026-01-01T00:00:00Z","next_change":null,"kinds":{` +
 	`"default":[{"machines":[{"start":0,"states":[{"record":{"pad":32}}]}]}]}}`
 
 // Fetch a signed bundle from an HTTP endpoint, then build the profile that

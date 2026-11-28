@@ -82,7 +82,7 @@ func TestProfileHandshake(t *testing.T) {
 	plan := func(n string) string {
 		return `[{"handshakes":{"establish":{"hello":{"pad":` + n + `}}}}]`
 	}
-	p, err := NewProfile(ProfileOptions{}, mustParse(t, `{"schema":2,"kinds":{"default":`+plan("5")+`,"websocket":`+plan("7")+`}}`))
+	p, err := NewProfile(ProfileOptions{}, mustParse(t, `{"kinds":{"default":`+plan("5")+`,"websocket":`+plan("7")+`}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestProfileHandshake(t *testing.T) {
 }
 
 func TestProfileOrder(t *testing.T) {
-	local := mustParse(t, `{"schema":2,"generated_at":"2026-01-01T00:00:00Z","kinds":{"default":[{"budget":{"wire":{"ceiling":1,"initial":1}}}]}}`)
+	local := mustParse(t, `{"generated_at":"2026-01-01T00:00:00Z","kinds":{"default":[{"budget":{"wire":{"ceiling":1,"initial":1}}}]}}`)
 	remote := mustParse(t, bundleJSON(""))
 	byLayer, _ := NewProfile(ProfileOptions{Order: ByLayer}, nil, local, remote)
 	byKind, _ := NewProfile(ProfileOptions{Order: ByKind}, local, remote)

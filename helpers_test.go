@@ -23,7 +23,7 @@ func bundleJSON(next string) string {
 	if next != "" {
 		n = `"` + next + `"`
 	}
-	return fmt.Sprintf(`{"schema":2,"generated_at":"2026-01-01T00:00:00Z","next_change":%s,"kinds":{`+
+	return fmt.Sprintf(`{"generated_at":"2026-01-01T00:00:00Z","next_change":%s,"kinds":{`+
 		`"websocket":[{"machines":%s,"budget":%s,"pool":%s}],`+
 		`"quic":[{"machines":%s}],`+
 		`"split":[{}],`+
