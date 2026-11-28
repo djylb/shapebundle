@@ -7,4 +7,4 @@ require (
 	github.com/zmuxio/zmux-go v1.5.7
 )
 
-require github.com/djylb/netx v0.0.0-20261127191924-b92e7788f062 // indirect
+require github.com/djylb/netx v0.0.0-20261128085858-ea2b7e348ba2 // indirect
